@@ -1,0 +1,225 @@
+:root {
+  --bg-main: radial-gradient(circle at top left, rgba(15, 118, 110, 0.16), transparent 28%),
+    radial-gradient(circle at bottom right, rgba(202, 138, 4, 0.14), transparent 24%),
+    linear-gradient(160deg, #eef3e8 0%, #f7f5ef 48%, #edf4f0 100%);
+  --surface-soft: rgba(255, 255, 255, 0.82);
+  --text-main: #102229;
+  --text-muted: #5b6b71;
+  --shadow-soft: 0 20px 60px rgba(16, 34, 41, 0.08);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  background: var(--bg-main);
+  color: var(--text-main);
+}
+
+.app-shell {
+  min-height: 100vh;
+  background: transparent;
+}
+
+.app-sider.ant-layout-sider {
+  background: linear-gradient(180deg, rgba(10, 35, 43, 0.98) 0%, rgba(15, 50, 45, 0.98) 100%);
+  padding: 24px 18px;
+}
+
+.brand-block {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  margin-bottom: 24px;
+}
+
+.brand-mark {
+  width: 54px;
+  height: 54px;
+  display: grid;
+  place-items: center;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #34d399, #facc15);
+  color: #07352c;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.brand-label,
+.brand-title {
+  color: #ffffff !important;
+  margin: 0 !important;
+}
+
+.brand-label,
+.header-kicker {
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 12px;
+  opacity: 0.72;
+}
+
+.sider-panel {
+  padding: 16px;
+  border-radius: 20px;
+  margin-bottom: 18px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.sider-panel-label {
+  color: rgba(255, 255, 255, 0.64) !important;
+  display: block;
+  margin-bottom: 8px;
+}
+
+.sider-panel-value {
+  color: #ffffff !important;
+  margin-bottom: 12px !important;
+  word-break: break-all;
+}
+
+.sider-menu.ant-menu {
+  background: transparent;
+  border-inline-end: none;
+}
+
+.app-header.ant-layout-header {
+  height: auto;
+  line-height: normal;
+  background: transparent;
+  padding: 24px 28px 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.header-title.ant-typography {
+  color: var(--text-main) !important;
+  margin: 0 !important;
+}
+
+.header-kicker {
+  color: var(--text-muted) !important;
+}
+
+.app-content.ant-layout-content {
+  padding: 24px 28px 28px;
+}
+
+.hero-card,
+.panel-card,
+.metric-card.ant-card {
+  background: var(--surface-soft);
+  border: 1px solid rgba(255, 255, 255, 0.75);
+  box-shadow: var(--shadow-soft);
+  backdrop-filter: blur(14px);
+}
+
+.hero-card {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 28px;
+  border-radius: 28px;
+}
+
+.hero-eyebrow {
+  color: #0f766e !important;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.hero-title.ant-typography {
+  margin-top: 10px !important;
+  margin-bottom: 10px !important;
+}
+
+.hero-description.ant-typography {
+  max-width: 720px;
+  color: var(--text-muted);
+  margin-bottom: 0;
+}
+
+.hero-actions {
+  display: flex;
+  align-items: center;
+}
+
+.metric-card.ant-card {
+  border-radius: 24px;
+}
+
+.metric-hint {
+  color: var(--text-muted);
+}
+
+.section-label {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+.panel-card {
+  border-radius: 28px;
+  padding: 22px;
+}
+
+.log-list-item {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.log-subtitle.ant-typography {
+  margin-bottom: 0;
+}
+
+.json-preview {
+  margin: 0;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(16, 34, 41, 0.06);
+  color: var(--text-main);
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.ant-table-wrapper .ant-table {
+  background: transparent;
+}
+
+.ant-table-wrapper .ant-table-thead > tr > th {
+  background: rgba(15, 118, 110, 0.06);
+}
+
+.ant-modal .ant-modal-content,
+.ant-drawer .ant-drawer-content {
+  border-radius: 24px;
+}
+
+@media (max-width: 992px) {
+  .app-header.ant-layout-header,
+  .app-content.ant-layout-content {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .hero-card {
+    flex-direction: column;
+  }
+}

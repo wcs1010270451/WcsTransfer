@@ -1,0 +1,6 @@
+DROP TABLE IF EXISTS request_logs;
+DROP TABLE IF EXISTS models;
+DROP TABLE IF EXISTS provider_keys;
+DROP TABLE IF EXISTS providers;
+DROP TABLE IF EXISTS admin_users;
+DROP FUNCTION IF EXISTS set_updated_at();

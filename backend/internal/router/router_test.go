@@ -1,0 +1,886 @@
+package router
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"wcstransfer/backend/internal/config"
+	"wcstransfer/backend/internal/entity"
+	"wcstransfer/backend/internal/platform"
+)
+
+type stubStore struct {
+	providers    []entity.Provider
+	providerKeys []entity.ProviderKey
+	models       []entity.Model
+	requestLogs  []entity.RequestLog
+	logDetails   map[int64]entity.RequestLogDetail
+	createdLogs  []entity.CreateRequestLogInput
+	dashboard    entity.DashboardStats
+}
+
+func (s *stubStore) ListProviders(context.Context) ([]entity.Provider, error) {
+	return s.providers, nil
+}
+
+func (s *stubStore) CreateProvider(_ context.Context, input entity.CreateProviderInput) (entity.Provider, error) {
+	item := entity.Provider{
+		ID:           int64(len(s.providers) + 1),
+		Name:         input.Name,
+		Slug:         input.Slug,
+		ProviderType: input.ProviderType,
+		BaseURL:      input.BaseURL,
+		Status:       input.Status,
+		Description:  input.Description,
+		ExtraConfig:  input.ExtraConfig,
+	}
+	s.providers = append(s.providers, item)
+	return item, nil
+}
+
+func (s *stubStore) UpdateProvider(_ context.Context, input entity.UpdateProviderInput) (entity.Provider, error) {
+	for index, item := range s.providers {
+		if item.ID == input.ID {
+			item.Name = input.Name
+			item.Slug = input.Slug
+			item.ProviderType = input.ProviderType
+			item.BaseURL = input.BaseURL
+			item.Status = input.Status
+			item.Description = input.Description
+			item.ExtraConfig = input.ExtraConfig
+			s.providers[index] = item
+			return item, nil
+		}
+	}
+
+	return entity.Provider{}, context.Canceled
+}
+
+func (s *stubStore) ListProviderKeys(context.Context) ([]entity.ProviderKey, error) {
+	return s.providerKeys, nil
+}
+
+func (s *stubStore) CreateProviderKey(_ context.Context, input entity.CreateProviderKeyInput) (entity.ProviderKey, error) {
+	item := entity.ProviderKey{
+		ID:           int64(len(s.providerKeys) + 1),
+		ProviderID:   input.ProviderID,
+		ProviderName: "stub-provider",
+		Name:         input.Name,
+		Status:       input.Status,
+		Weight:       input.Weight,
+		Priority:     input.Priority,
+		RPMLimit:     input.RPMLimit,
+		TPMLimit:     input.TPMLimit,
+		MaskedAPIKey: "sk-t***1234",
+	}
+	s.providerKeys = append(s.providerKeys, item)
+	return item, nil
+}
+
+func (s *stubStore) UpdateProviderKey(_ context.Context, input entity.UpdateProviderKeyInput) (entity.ProviderKey, error) {
+	for index, item := range s.providerKeys {
+		if item.ID == input.ID {
+			item.ProviderID = input.ProviderID
+			item.Name = input.Name
+			item.Status = input.Status
+			item.Weight = input.Weight
+			item.Priority = input.Priority
+			item.RPMLimit = input.RPMLimit
+			item.TPMLimit = input.TPMLimit
+			if input.APIKey != nil && strings.TrimSpace(*input.APIKey) != "" {
+				item.MaskedAPIKey = "sk-u***date"
+			}
+			s.providerKeys[index] = item
+			return item, nil
+		}
+	}
+
+	return entity.ProviderKey{}, context.Canceled
+}
+
+func (s *stubStore) ListModels(context.Context) ([]entity.Model, error) {
+	return s.models, nil
+}
+
+func (s *stubStore) CreateModel(_ context.Context, input entity.CreateModelInput) (entity.Model, error) {
+	item := entity.Model{
+		ID:             int64(len(s.models) + 1),
+		PublicName:     input.PublicName,
+		ProviderID:     input.ProviderID,
+		ProviderName:   "stub-provider",
+		UpstreamModel:  input.UpstreamModel,
+		RouteStrategy:  input.RouteStrategy,
+		IsEnabled:      input.IsEnabled,
+		MaxTokens:      input.MaxTokens,
+		Temperature:    input.Temperature,
+		TimeoutSeconds: input.TimeoutSeconds,
+		Metadata:       input.Metadata,
+	}
+	s.models = append(s.models, item)
+	return item, nil
+}
+
+func (s *stubStore) UpdateModel(_ context.Context, input entity.UpdateModelInput) (entity.Model, error) {
+	for index, item := range s.models {
+		if item.ID == input.ID {
+			item.PublicName = input.PublicName
+			item.ProviderID = input.ProviderID
+			item.ProviderName = "stub-provider"
+			item.UpstreamModel = input.UpstreamModel
+			item.RouteStrategy = input.RouteStrategy
+			item.IsEnabled = input.IsEnabled
+			item.MaxTokens = input.MaxTokens
+			item.Temperature = input.Temperature
+			item.TimeoutSeconds = input.TimeoutSeconds
+			item.Metadata = input.Metadata
+			s.models[index] = item
+			return item, nil
+		}
+	}
+
+	return entity.Model{}, context.Canceled
+}
+
+func (s *stubStore) ListEnabledModels(context.Context) ([]entity.Model, error) {
+	items := make([]entity.Model, 0)
+	for _, item := range s.models {
+		if item.IsEnabled {
+			items = append(items, item)
+		}
+	}
+	return items, nil
+}
+
+func (s *stubStore) ResolveModelRoute(_ context.Context, publicName string) (entity.ModelRoute, error) {
+	for _, item := range s.models {
+		if item.PublicName == publicName && item.IsEnabled {
+			return entity.ModelRoute{
+				Model: item,
+				Provider: entity.Provider{
+					ID:      item.ProviderID,
+					Name:    item.ProviderName,
+					BaseURL: "https://example.com/v1",
+					Status:  "active",
+				},
+				Keys: []entity.ProviderKey{
+					{
+						ID:         1,
+						ProviderID: item.ProviderID,
+						Name:       "default",
+						APIKey:     "sk-test-secret",
+						Status:     "active",
+						Priority:   100,
+						Weight:     100,
+					},
+				},
+			}, nil
+		}
+	}
+
+	return entity.ModelRoute{}, context.Canceled
+}
+
+func (s *stubStore) ListRequestLogs(_ context.Context, input entity.ListRequestLogsInput) (entity.RequestLogPage, error) {
+	filtered := make([]entity.RequestLog, 0)
+	for _, item := range s.requestLogs {
+		if input.ProviderID > 0 && item.ProviderID != input.ProviderID {
+			continue
+		}
+		if input.ModelPublicName != "" && item.ModelPublicName != input.ModelPublicName {
+			continue
+		}
+		if input.Success != nil && item.Success != *input.Success {
+			continue
+		}
+		if input.HTTPStatus > 0 && item.HTTPStatus != input.HTTPStatus {
+			continue
+		}
+		if input.TraceID != "" && !strings.Contains(item.TraceID, input.TraceID) {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+
+	page := input.Page
+	if page <= 0 {
+		page = 1
+	}
+	pageSize := input.PageSize
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	start := (page - 1) * pageSize
+	if start > len(filtered) {
+		start = len(filtered)
+	}
+	end := start + pageSize
+	if end > len(filtered) {
+		end = len(filtered)
+	}
+
+	return entity.RequestLogPage{
+		Items:    filtered[start:end],
+		Total:    int64(len(filtered)),
+		Page:     page,
+		PageSize: pageSize,
+	}, nil
+}
+
+func (s *stubStore) GetRequestLog(_ context.Context, id int64) (entity.RequestLogDetail, error) {
+	if item, ok := s.logDetails[id]; ok {
+		return item, nil
+	}
+
+	return entity.RequestLogDetail{}, context.Canceled
+}
+
+func (s *stubStore) ExportRequestLogs(_ context.Context, input entity.ListRequestLogsInput) ([]entity.RequestLog, error) {
+	page, err := s.ListRequestLogs(context.Background(), input)
+	if err != nil {
+		return nil, err
+	}
+
+	return page.Items, nil
+}
+
+func (s *stubStore) CreateRequestLog(_ context.Context, input entity.CreateRequestLogInput) error {
+	s.createdLogs = append(s.createdLogs, input)
+	return nil
+}
+
+func (s *stubStore) GetDashboardStats(context.Context) (entity.DashboardStats, error) {
+	return s.dashboard, nil
+}
+
+func TestPublicRoutes(t *testing.T) {
+	cfg := config.Config{
+		AppName:  "wcstransfer-gateway",
+		Env:      "test",
+		GinMode:  "test",
+		HTTPPort: "8080",
+	}
+
+	store := &stubStore{
+		models: []entity.Model{
+			{PublicName: "gpt-4o-mini", ProviderName: "stub-provider", IsEnabled: true},
+		},
+	}
+
+	engine := New(cfg, &platform.Dependencies{}, &Stores{Admin: store, Public: store})
+
+	testCases := []struct {
+		name   string
+		method string
+		path   string
+		status int
+	}{
+		{name: "healthz", method: http.MethodGet, path: "/healthz", status: http.StatusOK},
+		{name: "version", method: http.MethodGet, path: "/version", status: http.StatusOK},
+		{name: "models", method: http.MethodGet, path: "/v1/models", status: http.StatusOK},
+		{name: "chat completions invalid request", method: http.MethodPost, path: "/v1/chat/completions", status: http.StatusBadRequest},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(tc.method, tc.path, nil)
+
+			engine.ServeHTTP(recorder, request)
+
+			if recorder.Code != tc.status {
+				t.Fatalf("expected status %d, got %d", tc.status, recorder.Code)
+			}
+		})
+	}
+}
+
+func TestAdminRoutesRequireTokenWhenConfigured(t *testing.T) {
+	cfg := config.Config{
+		AppName:    "wcstransfer-gateway",
+		Env:        "test",
+		GinMode:    "test",
+		HTTPPort:   "8080",
+		AdminToken: "secret-token",
+	}
+
+	store := &stubStore{}
+	engine := New(cfg, &platform.Dependencies{}, &Stores{Admin: store, Public: store})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/admin/providers", nil)
+	engine.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, recorder.Code)
+	}
+}
+
+func TestAdminRoutesAllowTokenWhenProvided(t *testing.T) {
+	cfg := config.Config{
+		AppName:    "wcstransfer-gateway",
+		Env:        "test",
+		GinMode:    "test",
+		HTTPPort:   "8080",
+		AdminToken: "secret-token",
+	}
+
+	store := &stubStore{
+		providers: []entity.Provider{
+			{ID: 1, Name: "OpenAI Compatible", Slug: "openai-compatible"},
+		},
+	}
+
+	engine := New(cfg, &platform.Dependencies{}, &Stores{Admin: store, Public: store})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/admin/providers", nil)
+	request.Header.Set("Authorization", "Bearer secret-token")
+	engine.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
+	}
+}
+
+func TestCreateProviderRoute(t *testing.T) {
+	cfg := config.Config{
+		AppName:  "wcstransfer-gateway",
+		Env:      "test",
+		GinMode:  "test",
+		HTTPPort: "8080",
+	}
+
+	store := &stubStore{}
+	engine := New(cfg, &platform.Dependencies{}, &Stores{Admin: store, Public: store})
+
+	body, err := json.Marshal(map[string]any{
+		"name":          "OpenAI Compatible",
+		"slug":          "openai-compatible",
+		"provider_type": "openai_compatible",
+		"base_url":      "https://example.com/v1",
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/admin/providers", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d", http.StatusCreated, recorder.Code)
+	}
+}
+
+func TestAdminStatsRoute(t *testing.T) {
+	cfg := config.Config{
+		AppName:  "wcstransfer-gateway",
+		Env:      "test",
+		GinMode:  "test",
+		HTTPPort: "8080",
+	}
+
+	store := &stubStore{
+		dashboard: entity.DashboardStats{
+			WindowHours:       24,
+			ProviderCount:     2,
+			KeyCount:          3,
+			ActiveKeyCount:    2,
+			ModelCount:        4,
+			EnabledModelCount: 3,
+			RequestCount:      10,
+			SuccessCount:      8,
+			FailedCount:       2,
+			SuccessRate:       80,
+			AverageLatencyMS:  456.7,
+			PromptTokens:      100,
+			CompletionTokens:  200,
+			TotalTokens:       300,
+		},
+	}
+	engine := New(cfg, &platform.Dependencies{}, &Stores{Admin: store, Public: store})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/admin/stats", nil)
+	engine.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
+	}
+	if !strings.Contains(recorder.Body.String(), "\"request_count\":10") {
+		t.Fatalf("expected request_count in response body, got %s", recorder.Body.String())
+	}
+}
+
+func TestUpdateProviderRoute(t *testing.T) {
+	cfg := config.Config{AppName: "wcstransfer-gateway", Env: "test", GinMode: "test", HTTPPort: "8080"}
+	store := &stubStore{
+		providers: []entity.Provider{
+			{ID: 1, Name: "Old", Slug: "old", ProviderType: "openai_compatible", BaseURL: "https://old.example/v1", Status: "active"},
+		},
+	}
+	engine := New(cfg, &platform.Dependencies{}, &Stores{Admin: store, Public: store})
+
+	body, err := json.Marshal(map[string]any{
+		"name":          "New Name",
+		"slug":          "new-name",
+		"provider_type": "openai_compatible",
+		"base_url":      "https://new.example/v1",
+		"status":        "disabled",
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPut, "/admin/providers/1", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
+	}
+	if store.providers[0].Status != "disabled" {
+		t.Fatalf("expected provider status to update, got %+v", store.providers[0])
+	}
+}
+
+func TestUpdateKeyRoute(t *testing.T) {
+	cfg := config.Config{AppName: "wcstransfer-gateway", Env: "test", GinMode: "test", HTTPPort: "8080"}
+	store := &stubStore{
+		providerKeys: []entity.ProviderKey{
+			{ID: 1, ProviderID: 1, ProviderName: "stub-provider", Name: "default", Status: "active", Weight: 100, Priority: 100, MaskedAPIKey: "sk-t***1234"},
+		},
+	}
+	engine := New(cfg, &platform.Dependencies{}, &Stores{Admin: store, Public: store})
+
+	body, err := json.Marshal(map[string]any{
+		"provider_id": 1,
+		"name":        "backup",
+		"status":      "disabled",
+		"weight":      80,
+		"priority":    20,
+		"rpm_limit":   60,
+		"tpm_limit":   1000,
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPut, "/admin/keys/1", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
+	}
+	if store.providerKeys[0].Status != "disabled" || store.providerKeys[0].Name != "backup" {
+		t.Fatalf("expected key to update, got %+v", store.providerKeys[0])
+	}
+}
+
+func TestUpdateModelRoute(t *testing.T) {
+	cfg := config.Config{AppName: "wcstransfer-gateway", Env: "test", GinMode: "test", HTTPPort: "8080"}
+	store := &stubStore{
+		models: []entity.Model{
+			{ID: 1, PublicName: "gpt-4o-mini", ProviderID: 1, ProviderName: "stub-provider", UpstreamModel: "gpt-4o-mini", RouteStrategy: "fixed", IsEnabled: true},
+		},
+	}
+	engine := New(cfg, &platform.Dependencies{}, &Stores{Admin: store, Public: store})
+
+	body, err := json.Marshal(map[string]any{
+		"public_name":     "qwen-plus",
+		"provider_id":     1,
+		"upstream_model":  "qwen-plus-2025-11-25",
+		"route_strategy":  "failover",
+		"is_enabled":      false,
+		"max_tokens":      2048,
+		"temperature":     0.2,
+		"timeout_seconds": 90,
+		"metadata":        map[string]any{"tier": "gold"},
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPut, "/admin/models/1", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
+	}
+	if store.models[0].PublicName != "qwen-plus" || store.models[0].IsEnabled {
+		t.Fatalf("expected model to update, got %+v", store.models[0])
+	}
+}
+
+func TestListLogsRouteWithPaginationAndFilters(t *testing.T) {
+	cfg := config.Config{AppName: "wcstransfer-gateway", Env: "test", GinMode: "test", HTTPPort: "8080"}
+	store := &stubStore{
+		requestLogs: []entity.RequestLog{
+			{ID: 1, TraceID: "trace-a", ModelPublicName: "qwen-plus", ProviderID: 1, ProviderName: "Bailian", HTTPStatus: 200, Success: true, CreatedAt: time.Now()},
+			{ID: 2, TraceID: "trace-b", ModelPublicName: "gpt-4o-mini", ProviderID: 2, ProviderName: "OpenAI", HTTPStatus: 500, Success: false, CreatedAt: time.Now()},
+		},
+	}
+	engine := New(cfg, &platform.Dependencies{}, &Stores{Admin: store, Public: store})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/admin/logs?page=1&page_size=10&provider_id=1&success=true", nil)
+	engine.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
+	}
+	if !strings.Contains(recorder.Body.String(), "\"total\":1") || !strings.Contains(recorder.Body.String(), "\"trace_id\":\"trace-a\"") {
+		t.Fatalf("unexpected logs response: %s", recorder.Body.String())
+	}
+}
+
+func TestGetLogDetailRoute(t *testing.T) {
+	cfg := config.Config{AppName: "wcstransfer-gateway", Env: "test", GinMode: "test", HTTPPort: "8080"}
+	store := &stubStore{
+		logDetails: map[int64]entity.RequestLogDetail{
+			1: {
+				RequestLog: entity.RequestLog{
+					ID:              1,
+					TraceID:         "trace-a",
+					ModelPublicName: "qwen-plus",
+					ProviderName:    "Bailian",
+				},
+				RequestPayload:  json.RawMessage(`{"model":"qwen-plus"}`),
+				ResponsePayload: json.RawMessage(`{"id":"chatcmpl-1"}`),
+				Metadata:        json.RawMessage(`{"stream":false}`),
+			},
+		},
+	}
+	engine := New(cfg, &platform.Dependencies{}, &Stores{Admin: store, Public: store})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/admin/logs/1", nil)
+	engine.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
+	}
+	if !strings.Contains(recorder.Body.String(), "\"request_payload\":{\"model\":\"qwen-plus\"}") {
+		t.Fatalf("unexpected log detail response: %s", recorder.Body.String())
+	}
+}
+
+func TestExportLogsRoute(t *testing.T) {
+	cfg := config.Config{AppName: "wcstransfer-gateway", Env: "test", GinMode: "test", HTTPPort: "8080"}
+	success := true
+	store := &stubStore{
+		requestLogs: []entity.RequestLog{
+			{ID: 1, TraceID: "trace-a", ModelPublicName: "qwen-plus", ProviderName: "Bailian", ProviderKeyName: "primary", HTTPStatus: 200, Success: true, CreatedAt: time.Now()},
+			{ID: 2, TraceID: "trace-b", ModelPublicName: "gpt-4o-mini", ProviderName: "OpenAI", ProviderKeyName: "backup", HTTPStatus: 500, Success: false, CreatedAt: time.Now()},
+		},
+	}
+	engine := New(cfg, &platform.Dependencies{}, &Stores{Admin: store, Public: store})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/admin/logs/export?success=true", nil)
+	engine.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
+	}
+	if !strings.Contains(recorder.Body.String(), "trace-a") || strings.Contains(recorder.Body.String(), "trace-b") {
+		t.Fatalf("unexpected csv export response: %s", recorder.Body.String())
+	}
+	if success == false {
+		t.Fatalf("success filter should remain true")
+	}
+}
+
+func TestChatCompletionsProxyRoute(t *testing.T) {
+	upstreamCalled := false
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalled = true
+		if got := r.Header.Get("Authorization"); got != "Bearer sk-test-secret" {
+			t.Fatalf("unexpected authorization header: %s", got)
+		}
+
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode upstream body: %v", err)
+		}
+
+		if got := payload["model"]; got != "gpt-4o-mini-upstream" {
+			t.Fatalf("unexpected upstream model: %v", got)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id":      "chatcmpl-test",
+			"object":  "chat.completion",
+			"created": time.Now().Unix(),
+		})
+	}))
+	defer upstream.Close()
+
+	cfg := config.Config{
+		AppName:  "wcstransfer-gateway",
+		Env:      "test",
+		GinMode:  "test",
+		HTTPPort: "8080",
+	}
+
+	store := &stubStore{
+		models: []entity.Model{
+			{
+				ID:             1,
+				PublicName:     "gpt-4o-mini",
+				ProviderID:     1,
+				ProviderName:   "stub-provider",
+				UpstreamModel:  "gpt-4o-mini-upstream",
+				RouteStrategy:  "fixed",
+				IsEnabled:      true,
+				TimeoutSeconds: 30,
+			},
+		},
+	}
+
+	body, err := json.Marshal(map[string]any{
+		"model": "gpt-4o-mini",
+		"messages": []map[string]string{
+			{"role": "user", "content": "hello"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	// Swap in an upstream-aware store route and HTTP client through the handler constructor path.
+	store.models[0].ProviderName = "stub-provider"
+	routeStore := &stubStoreWithUpstream{
+		base:     store,
+		upstream: upstream.URL + "/v1",
+	}
+	engine := New(cfg, &platform.Dependencies{}, &Stores{
+		Admin:  routeStore,
+		Log:    routeStore,
+		Public: routeStore,
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
+	}
+	if !upstreamCalled {
+		t.Fatalf("expected upstream server to be called")
+	}
+	if len(store.createdLogs) != 1 {
+		t.Fatalf("expected 1 created log, got %d", len(store.createdLogs))
+	}
+	if store.createdLogs[0].ModelPublicName != "gpt-4o-mini" {
+		t.Fatalf("unexpected logged model: %s", store.createdLogs[0].ModelPublicName)
+	}
+	if !store.createdLogs[0].Success {
+		t.Fatalf("expected success log entry")
+	}
+}
+
+func TestChatCompletionsStreamProxyRoute(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var requestPayload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&requestPayload); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+
+		streamOptions, ok := requestPayload["stream_options"].(map[string]any)
+		if !ok || streamOptions["include_usage"] != true {
+			t.Fatalf("expected stream_options.include_usage=true, got %v", requestPayload["stream_options"])
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+
+		flusher, _ := w.(http.Flusher)
+		_, _ = w.Write([]byte("data: {\"id\":\"chunk-1\"}\n\n"))
+		if flusher != nil {
+			flusher.Flush()
+		}
+		_, _ = w.Write([]byte("data: {\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":34,\"total_tokens\":46}}\n\n"))
+		if flusher != nil {
+			flusher.Flush()
+		}
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}))
+	defer upstream.Close()
+
+	cfg := config.Config{
+		AppName:  "wcstransfer-gateway",
+		Env:      "test",
+		GinMode:  "test",
+		HTTPPort: "8080",
+	}
+
+	store := &stubStore{
+		models: []entity.Model{
+			{
+				ID:             1,
+				PublicName:     "gpt-4o-mini",
+				ProviderID:     1,
+				ProviderName:   "stub-provider",
+				UpstreamModel:  "gpt-4o-mini-upstream",
+				RouteStrategy:  "fixed",
+				IsEnabled:      true,
+				TimeoutSeconds: 30,
+			},
+		},
+	}
+
+	body, err := json.Marshal(map[string]any{
+		"model":  "gpt-4o-mini",
+		"stream": true,
+		"messages": []map[string]string{
+			{"role": "user", "content": "hello"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	routeStore := &stubStoreWithUpstream{
+		base:     store,
+		upstream: upstream.URL + "/v1",
+	}
+	engine := New(cfg, &platform.Dependencies{}, &Stores{
+		Admin:  routeStore,
+		Log:    routeStore,
+		Public: routeStore,
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
+	}
+	if !strings.Contains(recorder.Body.String(), "data: {\"id\":\"chunk-1\"}") {
+		t.Fatalf("expected streamed chunk in response body, got %s", recorder.Body.String())
+	}
+	if len(store.createdLogs) != 1 {
+		t.Fatalf("expected 1 created log, got %d", len(store.createdLogs))
+	}
+	if !strings.Contains(string(store.createdLogs[0].Metadata), "\"stream_response\":true") {
+		t.Fatalf("expected stream_response metadata, got %s", string(store.createdLogs[0].Metadata))
+	}
+	if store.createdLogs[0].PromptTokens != 12 || store.createdLogs[0].CompletionTokens != 34 || store.createdLogs[0].TotalTokens != 46 {
+		t.Fatalf("unexpected logged usage: %+v", store.createdLogs[0])
+	}
+}
+
+type stubStoreWithUpstream struct {
+	base     *stubStore
+	upstream string
+}
+
+func (s *stubStoreWithUpstream) ListProviders(ctx context.Context) ([]entity.Provider, error) {
+	return s.base.ListProviders(ctx)
+}
+
+func (s *stubStoreWithUpstream) CreateProvider(ctx context.Context, input entity.CreateProviderInput) (entity.Provider, error) {
+	return s.base.CreateProvider(ctx, input)
+}
+
+func (s *stubStoreWithUpstream) UpdateProvider(ctx context.Context, input entity.UpdateProviderInput) (entity.Provider, error) {
+	return s.base.UpdateProvider(ctx, input)
+}
+
+func (s *stubStoreWithUpstream) ListProviderKeys(ctx context.Context) ([]entity.ProviderKey, error) {
+	return s.base.ListProviderKeys(ctx)
+}
+
+func (s *stubStoreWithUpstream) CreateProviderKey(ctx context.Context, input entity.CreateProviderKeyInput) (entity.ProviderKey, error) {
+	return s.base.CreateProviderKey(ctx, input)
+}
+
+func (s *stubStoreWithUpstream) UpdateProviderKey(ctx context.Context, input entity.UpdateProviderKeyInput) (entity.ProviderKey, error) {
+	return s.base.UpdateProviderKey(ctx, input)
+}
+
+func (s *stubStoreWithUpstream) ListModels(ctx context.Context) ([]entity.Model, error) {
+	return s.base.ListModels(ctx)
+}
+
+func (s *stubStoreWithUpstream) CreateModel(ctx context.Context, input entity.CreateModelInput) (entity.Model, error) {
+	return s.base.CreateModel(ctx, input)
+}
+
+func (s *stubStoreWithUpstream) UpdateModel(ctx context.Context, input entity.UpdateModelInput) (entity.Model, error) {
+	return s.base.UpdateModel(ctx, input)
+}
+
+func (s *stubStoreWithUpstream) ListEnabledModels(ctx context.Context) ([]entity.Model, error) {
+	return s.base.ListEnabledModels(ctx)
+}
+
+func (s *stubStoreWithUpstream) ResolveModelRoute(_ context.Context, publicName string) (entity.ModelRoute, error) {
+	for _, item := range s.base.models {
+		if item.PublicName == publicName && item.IsEnabled {
+			return entity.ModelRoute{
+				Model: item,
+				Provider: entity.Provider{
+					ID:      item.ProviderID,
+					Name:    item.ProviderName,
+					BaseURL: s.upstream,
+					Status:  "active",
+				},
+				Keys: []entity.ProviderKey{
+					{
+						ID:         1,
+						ProviderID: item.ProviderID,
+						Name:       "default",
+						APIKey:     "sk-test-secret",
+						Status:     "active",
+						Priority:   100,
+						Weight:     100,
+					},
+				},
+			}, nil
+		}
+	}
+
+	return entity.ModelRoute{}, context.Canceled
+}
+
+func (s *stubStoreWithUpstream) ListRequestLogs(ctx context.Context, input entity.ListRequestLogsInput) (entity.RequestLogPage, error) {
+	return s.base.ListRequestLogs(ctx, input)
+}
+
+func (s *stubStoreWithUpstream) GetRequestLog(ctx context.Context, id int64) (entity.RequestLogDetail, error) {
+	return s.base.GetRequestLog(ctx, id)
+}
+
+func (s *stubStoreWithUpstream) ExportRequestLogs(ctx context.Context, input entity.ListRequestLogsInput) ([]entity.RequestLog, error) {
+	return s.base.ExportRequestLogs(ctx, input)
+}
+
+func (s *stubStoreWithUpstream) CreateRequestLog(ctx context.Context, input entity.CreateRequestLogInput) error {
+	return s.base.CreateRequestLog(ctx, input)
+}
+
+func (s *stubStoreWithUpstream) GetDashboardStats(ctx context.Context) (entity.DashboardStats, error) {
+	return s.base.GetDashboardStats(ctx)
+}
