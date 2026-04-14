@@ -16,10 +16,12 @@ import (
 
 	"wcstransfer/backend/internal/entity"
 	"wcstransfer/backend/internal/repository"
+	"wcstransfer/backend/internal/service/keyhealth"
 )
 
 type Handler struct {
-	store repository.AdminStore
+	store     repository.AdminStore
+	keyHealth *keyhealth.Tracker
 }
 
 type createProviderRequest struct {
@@ -40,6 +42,26 @@ type updateProviderRequest struct {
 	Status       string          `json:"status"`
 	Description  string          `json:"description"`
 	ExtraConfig  json.RawMessage `json:"extra_config"`
+}
+
+type createClientAPIKeyRequest struct {
+	Name              string  `json:"name" binding:"required"`
+	Status            string  `json:"status"`
+	Description       string  `json:"description"`
+	RPMLimit          int     `json:"rpm_limit"`
+	DailyRequestLimit int     `json:"daily_request_limit"`
+	DailyTokenLimit   int     `json:"daily_token_limit"`
+	ExpiresAt         *string `json:"expires_at"`
+}
+
+type updateClientAPIKeyRequest struct {
+	Name              string  `json:"name" binding:"required"`
+	Status            string  `json:"status"`
+	Description       string  `json:"description"`
+	RPMLimit          int     `json:"rpm_limit"`
+	DailyRequestLimit int     `json:"daily_request_limit"`
+	DailyTokenLimit   int     `json:"daily_token_limit"`
+	ExpiresAt         *string `json:"expires_at"`
 }
 
 type createProviderKeyRequest struct {
@@ -88,8 +110,8 @@ type updateModelRequest struct {
 	Metadata       json.RawMessage `json:"metadata"`
 }
 
-func NewHandler(store repository.AdminStore) *Handler {
-	return &Handler{store: store}
+func NewHandler(store repository.AdminStore, tracker *keyhealth.Tracker) *Handler {
+	return &Handler{store: store, keyHealth: tracker}
 }
 
 func (h *Handler) ListProviders(c *gin.Context) {
@@ -188,6 +210,112 @@ func (h *Handler) UpdateProvider(c *gin.Context) {
 	c.JSON(http.StatusOK, item)
 }
 
+func (h *Handler) ListClientAPIKeys(c *gin.Context) {
+	if h.store == nil {
+		writeServiceUnavailable(c)
+		return
+	}
+
+	items, err := h.store.ListClientAPIKeys(c.Request.Context())
+	if err != nil {
+		writeDatabaseError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"items": items,
+		"total": len(items),
+	})
+}
+
+func (h *Handler) CreateClientAPIKey(c *gin.Context) {
+	if h.store == nil {
+		writeServiceUnavailable(c)
+		return
+	}
+
+	var request createClientAPIKeyRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		writeBadRequest(c, "invalid request body")
+		return
+	}
+
+	expiresAt, ok := parseOptionalTime(request.ExpiresAt)
+	if !ok {
+		writeBadRequest(c, "expires_at must be an RFC3339 datetime")
+		return
+	}
+
+	input := entity.CreateClientAPIKeyInput{
+		Name:              strings.TrimSpace(request.Name),
+		Status:            defaultString(request.Status, "active"),
+		Description:       strings.TrimSpace(request.Description),
+		RPMLimit:          request.RPMLimit,
+		DailyRequestLimit: request.DailyRequestLimit,
+		DailyTokenLimit:   request.DailyTokenLimit,
+		ExpiresAt:         expiresAt,
+	}
+	if input.Name == "" {
+		writeBadRequest(c, "name is required")
+		return
+	}
+
+	item, err := h.store.CreateClientAPIKey(c.Request.Context(), input)
+	if err != nil {
+		writeDatabaseError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusCreated, item)
+}
+
+func (h *Handler) UpdateClientAPIKey(c *gin.Context) {
+	if h.store == nil {
+		writeServiceUnavailable(c)
+		return
+	}
+
+	id, ok := parseResourceID(c)
+	if !ok {
+		return
+	}
+
+	var request updateClientAPIKeyRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		writeBadRequest(c, "invalid request body")
+		return
+	}
+
+	expiresAt, valid := parseOptionalTime(request.ExpiresAt)
+	if !valid {
+		writeBadRequest(c, "expires_at must be an RFC3339 datetime")
+		return
+	}
+
+	input := entity.UpdateClientAPIKeyInput{
+		ID:                id,
+		Name:              strings.TrimSpace(request.Name),
+		Status:            defaultString(request.Status, "active"),
+		Description:       strings.TrimSpace(request.Description),
+		RPMLimit:          request.RPMLimit,
+		DailyRequestLimit: request.DailyRequestLimit,
+		DailyTokenLimit:   request.DailyTokenLimit,
+		ExpiresAt:         expiresAt,
+	}
+	if input.Name == "" {
+		writeBadRequest(c, "name is required")
+		return
+	}
+
+	item, err := h.store.UpdateClientAPIKey(c.Request.Context(), input)
+	if err != nil {
+		writeDatabaseError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, item)
+}
+
 func (h *Handler) ListProviderKeys(c *gin.Context) {
 	if h.store == nil {
 		writeServiceUnavailable(c)
@@ -198,6 +326,9 @@ func (h *Handler) ListProviderKeys(c *gin.Context) {
 	if err != nil {
 		writeDatabaseError(c, err)
 		return
+	}
+	if h.keyHealth != nil {
+		items = h.keyHealth.EnrichKeys(items)
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -504,6 +635,7 @@ func (h *Handler) ExportLogs(c *gin.Context) {
 	_ = writer.Write([]string{
 		"id",
 		"trace_id",
+		"client_api_key_name",
 		"provider_name",
 		"provider_key_name",
 		"model_public_name",
@@ -522,6 +654,7 @@ func (h *Handler) ExportLogs(c *gin.Context) {
 		_ = writer.Write([]string{
 			strconv.FormatInt(item.ID, 10),
 			item.TraceID,
+			item.ClientAPIKeyName,
 			item.ProviderName,
 			item.ProviderKeyName,
 			item.ModelPublicName,
@@ -743,6 +876,19 @@ func parseTimeQuery(c *gin.Context, key string) (*time.Time, bool) {
 	parsed, err := time.Parse(time.RFC3339, raw)
 	if err != nil {
 		writeBadRequest(c, key+" must be an RFC3339 datetime")
+		return nil, false
+	}
+
+	return &parsed, true
+}
+
+func parseOptionalTime(value *string) (*time.Time, bool) {
+	if value == nil || strings.TrimSpace(*value) == "" {
+		return nil, true
+	}
+
+	parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(*value))
+	if err != nil {
 		return nil, false
 	}
 

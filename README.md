@@ -40,6 +40,8 @@ Available endpoints:
 - `GET /version`
 - `GET /v1/models`
 - `POST /v1/chat/completions`
+- `GET /admin/client-keys`
+- `POST /admin/client-keys`
 - `GET /admin/providers`
 - `POST /admin/providers`
 - `GET /admin/keys`
@@ -60,4 +62,7 @@ Services:
 - Redis: `localhost:6379`
 - Backend API: `http://localhost:8080`
 
-The first PostgreSQL startup automatically applies `backend/migrations/0001_init.up.sql`.
+The first PostgreSQL startup automatically applies the backend migrations, including client API key and quota schemas in:
+
+- `backend/migrations/0002_client_api_keys.up.sql`
+- `backend/migrations/0003_client_key_quotas.up.sql`

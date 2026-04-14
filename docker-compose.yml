@@ -11,6 +11,8 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./backend/migrations/0001_init.up.sql:/docker-entrypoint-initdb.d/0001_init.sql:ro
+      - ./backend/migrations/0002_client_api_keys.up.sql:/docker-entrypoint-initdb.d/0002_client_api_keys.sql:ro
+      - ./backend/migrations/0003_client_key_quotas.up.sql:/docker-entrypoint-initdb.d/0003_client_key_quotas.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U wcstransfer -d wcstransfer"]
       interval: 5s

@@ -204,6 +204,7 @@ export default function LogsPage() {
           onChange={handleTableChange}
           columns={[
             { title: "Trace ID", dataIndex: "trace_id", key: "trace_id", width: 220, ellipsis: true },
+            { title: "Client", dataIndex: "client_api_key_name", key: "client_api_key_name", width: 160 },
             { title: "Provider", dataIndex: "provider_name", key: "provider_name", width: 140 },
             { title: "Key", dataIndex: "provider_key_name", key: "provider_key_name", width: 140 },
             { title: "Model", dataIndex: "model_public_name", key: "model_public_name", width: 160 },
@@ -258,6 +259,7 @@ export default function LogsPage() {
               </Descriptions.Item>
               <Descriptions.Item label="Provider">{selectedLog.provider_name || "-"}</Descriptions.Item>
               <Descriptions.Item label="Key">{selectedLog.provider_key_name || "-"}</Descriptions.Item>
+              <Descriptions.Item label="Client">{selectedLog.client_api_key_name || "-"}</Descriptions.Item>
               <Descriptions.Item label="Model">{selectedLog.model_public_name || "-"}</Descriptions.Item>
               <Descriptions.Item label="Upstream Model">{selectedLog.upstream_model || "-"}</Descriptions.Item>
               <Descriptions.Item label="Status">

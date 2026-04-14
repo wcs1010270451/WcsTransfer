@@ -19,22 +19,25 @@ type Provider struct {
 }
 
 type ProviderKey struct {
-	ID               int64     `json:"id"`
-	ProviderID       int64     `json:"provider_id"`
-	ProviderName     string    `json:"provider_name"`
-	Name             string    `json:"name"`
-	APIKey           string    `json:"-"`
-	Status           string    `json:"status"`
-	Weight           int       `json:"weight"`
-	Priority         int       `json:"priority"`
-	RPMLimit         int       `json:"rpm_limit"`
-	TPMLimit         int64     `json:"tpm_limit"`
-	CurrentRPM       int       `json:"current_rpm"`
-	CurrentTPM       int64     `json:"current_tpm"`
-	MaskedAPIKey     string    `json:"masked_api_key"`
-	LastErrorMessage string    `json:"last_error_message"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	ID               int64      `json:"id"`
+	ProviderID       int64      `json:"provider_id"`
+	ProviderName     string     `json:"provider_name"`
+	Name             string     `json:"name"`
+	APIKey           string     `json:"-"`
+	Status           string     `json:"status"`
+	HealthStatus     string     `json:"health_status"`
+	CooldownReason   string     `json:"cooldown_reason,omitempty"`
+	CooldownUntil    *time.Time `json:"cooldown_until,omitempty"`
+	Weight           int        `json:"weight"`
+	Priority         int        `json:"priority"`
+	RPMLimit         int        `json:"rpm_limit"`
+	TPMLimit         int64      `json:"tpm_limit"`
+	CurrentRPM       int        `json:"current_rpm"`
+	CurrentTPM       int64      `json:"current_tpm"`
+	MaskedAPIKey     string     `json:"masked_api_key"`
+	LastErrorMessage string     `json:"last_error_message"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
 }
 
 type Model struct {
@@ -59,6 +62,24 @@ type ModelRoute struct {
 	Keys     []ProviderKey `json:"keys"`
 }
 
+type ClientAPIKey struct {
+	ID               int64      `json:"id"`
+	Name             string     `json:"name"`
+	MaskedKey        string     `json:"masked_key"`
+	PlainAPIKey      string     `json:"plain_api_key,omitempty"`
+	Status           string     `json:"status"`
+	Description      string     `json:"description"`
+	RPMLimit         int        `json:"rpm_limit"`
+	DailyRequestLimit int       `json:"daily_request_limit"`
+	DailyTokenLimit  int        `json:"daily_token_limit"`
+	ExpiresAt        *time.Time `json:"expires_at,omitempty"`
+	LastUsedAt       *time.Time `json:"last_used_at,omitempty"`
+	LastErrorAt      *time.Time `json:"last_error_at,omitempty"`
+	LastErrorMessage string     `json:"last_error_message"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
+}
+
 type RequestLog struct {
 	ID               int64     `json:"id"`
 	TraceID          string    `json:"trace_id"`
@@ -69,6 +90,8 @@ type RequestLog struct {
 	ProviderName     string    `json:"provider_name"`
 	ProviderKeyID    int64     `json:"provider_key_id"`
 	ProviderKeyName  string    `json:"provider_key_name"`
+	ClientAPIKeyID   int64     `json:"client_api_key_id"`
+	ClientAPIKeyName string    `json:"client_api_key_name"`
 	ClientIP         string    `json:"client_ip"`
 	RequestMethod    string    `json:"request_method"`
 	RequestPath      string    `json:"request_path"`
@@ -158,6 +181,7 @@ type CreateRequestLogInput struct {
 	UpstreamModel    string
 	ProviderID       int64
 	ProviderKeyID    int64
+	ClientAPIKeyID   int64
 	ClientIP         string
 	RequestMethod    string
 	RequestPath      string
@@ -173,6 +197,27 @@ type CreateRequestLogInput struct {
 	RequestPayload   json.RawMessage
 	ResponsePayload  json.RawMessage
 	Metadata         json.RawMessage
+}
+
+type CreateClientAPIKeyInput struct {
+	Name        string
+	Status      string
+	Description string
+	RPMLimit    int
+	DailyRequestLimit int
+	DailyTokenLimit int
+	ExpiresAt   *time.Time
+}
+
+type UpdateClientAPIKeyInput struct {
+	ID          int64
+	Name        string
+	Status      string
+	Description string
+	RPMLimit    int
+	DailyRequestLimit int
+	DailyTokenLimit int
+	ExpiresAt   *time.Time
 }
 
 type CreateProviderInput struct {

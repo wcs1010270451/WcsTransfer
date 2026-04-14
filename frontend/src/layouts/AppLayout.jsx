@@ -2,7 +2,9 @@ import { useState } from "react";
 import {
   ApiOutlined,
   AppstoreOutlined,
+  ContactsOutlined,
   DatabaseOutlined,
+  ExperimentOutlined,
   FileTextOutlined,
   KeyOutlined,
   SettingOutlined,
@@ -15,10 +17,12 @@ import useSettingsStore from "../store/settingsStore";
 const { Header, Content, Sider } = Layout;
 
 const menuItems = [
-  { key: "/dashboard", icon: <AppstoreOutlined />, label: "总览" },
+  { key: "/dashboard", icon: <AppstoreOutlined />, label: "Dashboard" },
   { key: "/providers", icon: <DatabaseOutlined />, label: "Providers" },
+  { key: "/client-keys", icon: <ContactsOutlined />, label: "Client Keys" },
   { key: "/keys", icon: <KeyOutlined />, label: "Keys" },
   { key: "/models", icon: <ApiOutlined />, label: "Models" },
+  { key: "/debug", icon: <ExperimentOutlined />, label: "Debug" },
   { key: "/logs", icon: <FileTextOutlined />, label: "Logs" },
 ];
 
@@ -42,7 +46,7 @@ export default function AppLayout() {
         </div>
 
         <div className="sider-panel">
-          <Typography.Text className="sider-panel-label">当前连接</Typography.Text>
+          <Typography.Text className="sider-panel-label">Current endpoint</Typography.Text>
           <Typography.Paragraph className="sider-panel-value">{apiBaseUrl}</Typography.Paragraph>
           <Tag color="green" bordered={false}>
             Admin API Ready
@@ -63,14 +67,14 @@ export default function AppLayout() {
         <Header className="app-header">
           <Space size="middle">
             <div>
-              <Typography.Text className="header-kicker">内部管理台</Typography.Text>
+              <Typography.Text className="header-kicker">Internal console</Typography.Text>
               <Typography.Title level={3} className="header-title">
                 Gateway Control Room
               </Typography.Title>
             </div>
           </Space>
           <Button icon={<SettingOutlined />} onClick={() => setSettingsOpen(true)}>
-            连接设置
+            Connection Settings
           </Button>
         </Header>
 

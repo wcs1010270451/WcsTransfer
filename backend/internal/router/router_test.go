@@ -17,6 +17,7 @@ import (
 
 type stubStore struct {
 	providers    []entity.Provider
+	clientKeys   []entity.ClientAPIKey
 	providerKeys []entity.ProviderKey
 	models       []entity.Model
 	requestLogs  []entity.RequestLog
@@ -60,6 +61,45 @@ func (s *stubStore) UpdateProvider(_ context.Context, input entity.UpdateProvide
 	}
 
 	return entity.Provider{}, context.Canceled
+}
+
+func (s *stubStore) ListClientAPIKeys(context.Context) ([]entity.ClientAPIKey, error) {
+	return s.clientKeys, nil
+}
+
+func (s *stubStore) CreateClientAPIKey(_ context.Context, input entity.CreateClientAPIKeyInput) (entity.ClientAPIKey, error) {
+	item := entity.ClientAPIKey{
+		ID:                int64(len(s.clientKeys) + 1),
+		Name:              input.Name,
+		MaskedKey:         "wcs_live_abc...1234",
+		PlainAPIKey:       "wcs_live_plain_test_key",
+		Status:            input.Status,
+		Description:       input.Description,
+		RPMLimit:          input.RPMLimit,
+		DailyRequestLimit: input.DailyRequestLimit,
+		DailyTokenLimit:   input.DailyTokenLimit,
+		ExpiresAt:         input.ExpiresAt,
+	}
+	s.clientKeys = append(s.clientKeys, item)
+	return item, nil
+}
+
+func (s *stubStore) UpdateClientAPIKey(_ context.Context, input entity.UpdateClientAPIKeyInput) (entity.ClientAPIKey, error) {
+	for index, item := range s.clientKeys {
+		if item.ID == input.ID {
+			item.Name = input.Name
+			item.Status = input.Status
+			item.Description = input.Description
+			item.RPMLimit = input.RPMLimit
+			item.DailyRequestLimit = input.DailyRequestLimit
+			item.DailyTokenLimit = input.DailyTokenLimit
+			item.ExpiresAt = input.ExpiresAt
+			s.clientKeys[index] = item
+			return item, nil
+		}
+	}
+
+	return entity.ClientAPIKey{}, context.Canceled
 }
 
 func (s *stubStore) ListProviderKeys(context.Context) ([]entity.ProviderKey, error) {
@@ -186,6 +226,17 @@ func (s *stubStore) ResolveModelRoute(_ context.Context, publicName string) (ent
 	return entity.ModelRoute{}, context.Canceled
 }
 
+func (s *stubStore) AuthenticateClientAPIKey(_ context.Context, rawKey string) (entity.ClientAPIKey, error) {
+	trimmed := strings.TrimSpace(rawKey)
+	for _, item := range s.clientKeys {
+		if item.PlainAPIKey == trimmed && item.Status == "active" {
+			return item, nil
+		}
+	}
+
+	return entity.ClientAPIKey{}, context.Canceled
+}
+
 func (s *stubStore) ListRequestLogs(_ context.Context, input entity.ListRequestLogsInput) (entity.RequestLogPage, error) {
 	filtered := make([]entity.RequestLog, 0)
 	for _, item := range s.requestLogs {
@@ -267,6 +318,9 @@ func TestPublicRoutes(t *testing.T) {
 	}
 
 	store := &stubStore{
+		clientKeys: []entity.ClientAPIKey{
+			{ID: 7, Name: "integration-client", PlainAPIKey: "wcs_live_proxy_test", Status: "active"},
+		},
 		models: []entity.Model{
 			{PublicName: "gpt-4o-mini", ProviderName: "stub-provider", IsEnabled: true},
 		},
@@ -341,6 +395,62 @@ func TestAdminRoutesAllowTokenWhenProvided(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/admin/providers", nil)
 	request.Header.Set("Authorization", "Bearer secret-token")
+	engine.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
+	}
+}
+
+func TestPublicRoutesRequireClientAPIKeyWhenAuthStoreConfigured(t *testing.T) {
+	cfg := config.Config{
+		AppName:  "wcstransfer-gateway",
+		Env:      "test",
+		GinMode:  "test",
+		HTTPPort: "8080",
+	}
+
+	store := &stubStore{}
+	engine := New(cfg, &platform.Dependencies{}, &Stores{
+		Admin:  store,
+		Auth:   store,
+		Public: store,
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	engine.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, recorder.Code)
+	}
+}
+
+func TestPublicRoutesAllowClientAPIKeyWhenProvided(t *testing.T) {
+	cfg := config.Config{
+		AppName:  "wcstransfer-gateway",
+		Env:      "test",
+		GinMode:  "test",
+		HTTPPort: "8080",
+	}
+
+	store := &stubStore{
+		clientKeys: []entity.ClientAPIKey{
+			{ID: 9, Name: "web-app", PlainAPIKey: "wcs_live_test_public", Status: "active"},
+		},
+		models: []entity.Model{
+			{PublicName: "gpt-4o-mini", ProviderName: "stub-provider", IsEnabled: true},
+		},
+	}
+	engine := New(cfg, &platform.Dependencies{}, &Stores{
+		Admin:  store,
+		Auth:   store,
+		Public: store,
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	request.Header.Set("Authorization", "Bearer wcs_live_test_public")
 	engine.ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusOK {
@@ -490,6 +600,9 @@ func TestUpdateKeyRoute(t *testing.T) {
 func TestUpdateModelRoute(t *testing.T) {
 	cfg := config.Config{AppName: "wcstransfer-gateway", Env: "test", GinMode: "test", HTTPPort: "8080"}
 	store := &stubStore{
+		clientKeys: []entity.ClientAPIKey{
+			{ID: 7, Name: "integration-client", PlainAPIKey: "wcs_live_proxy_test", Status: "active"},
+		},
 		models: []entity.Model{
 			{ID: 1, PublicName: "gpt-4o-mini", ProviderID: 1, ProviderName: "stub-provider", UpstreamModel: "gpt-4o-mini", RouteStrategy: "fixed", IsEnabled: true},
 		},
@@ -637,6 +750,9 @@ func TestChatCompletionsProxyRoute(t *testing.T) {
 	}
 
 	store := &stubStore{
+		clientKeys: []entity.ClientAPIKey{
+			{ID: 7, Name: "integration-client", PlainAPIKey: "wcs_live_proxy_test", Status: "active"},
+		},
 		models: []entity.Model{
 			{
 				ID:             1,
@@ -648,6 +764,10 @@ func TestChatCompletionsProxyRoute(t *testing.T) {
 				IsEnabled:      true,
 				TimeoutSeconds: 30,
 			},
+		},
+		providerKeys: []entity.ProviderKey{
+			{ID: 1, ProviderID: 1, ProviderName: "stub-provider", Name: "primary", Status: "active", Weight: 100, Priority: 10, MaskedAPIKey: "sk-p***ary"},
+			{ID: 2, ProviderID: 1, ProviderName: "stub-provider", Name: "backup", Status: "active", Weight: 100, Priority: 20, MaskedAPIKey: "sk-b***kup"},
 		},
 	}
 
@@ -669,6 +789,7 @@ func TestChatCompletionsProxyRoute(t *testing.T) {
 	}
 	engine := New(cfg, &platform.Dependencies{}, &Stores{
 		Admin:  routeStore,
+		Auth:   routeStore,
 		Log:    routeStore,
 		Public: routeStore,
 	})
@@ -676,6 +797,7 @@ func TestChatCompletionsProxyRoute(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer wcs_live_proxy_test")
 	engine.ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusOK {
@@ -692,6 +814,9 @@ func TestChatCompletionsProxyRoute(t *testing.T) {
 	}
 	if !store.createdLogs[0].Success {
 		t.Fatalf("expected success log entry")
+	}
+	if store.createdLogs[0].ClientAPIKeyID != 7 {
+		t.Fatalf("expected client api key id to be logged, got %+v", store.createdLogs[0])
 	}
 }
 
@@ -746,6 +871,10 @@ func TestChatCompletionsStreamProxyRoute(t *testing.T) {
 				TimeoutSeconds: 30,
 			},
 		},
+		providerKeys: []entity.ProviderKey{
+			{ID: 1, ProviderID: 1, ProviderName: "stub-provider", Name: "primary", Status: "active", Weight: 100, Priority: 10, MaskedAPIKey: "sk-p***ary"},
+			{ID: 2, ProviderID: 1, ProviderName: "stub-provider", Name: "backup", Status: "active", Weight: 100, Priority: 20, MaskedAPIKey: "sk-b***kup"},
+		},
 	}
 
 	body, err := json.Marshal(map[string]any{
@@ -794,6 +923,7 @@ func TestChatCompletionsStreamProxyRoute(t *testing.T) {
 type stubStoreWithUpstream struct {
 	base     *stubStore
 	upstream string
+	keys     []entity.ProviderKey
 }
 
 func (s *stubStoreWithUpstream) ListProviders(ctx context.Context) ([]entity.Provider, error) {
@@ -806,6 +936,18 @@ func (s *stubStoreWithUpstream) CreateProvider(ctx context.Context, input entity
 
 func (s *stubStoreWithUpstream) UpdateProvider(ctx context.Context, input entity.UpdateProviderInput) (entity.Provider, error) {
 	return s.base.UpdateProvider(ctx, input)
+}
+
+func (s *stubStoreWithUpstream) ListClientAPIKeys(ctx context.Context) ([]entity.ClientAPIKey, error) {
+	return s.base.ListClientAPIKeys(ctx)
+}
+
+func (s *stubStoreWithUpstream) CreateClientAPIKey(ctx context.Context, input entity.CreateClientAPIKeyInput) (entity.ClientAPIKey, error) {
+	return s.base.CreateClientAPIKey(ctx, input)
+}
+
+func (s *stubStoreWithUpstream) UpdateClientAPIKey(ctx context.Context, input entity.UpdateClientAPIKeyInput) (entity.ClientAPIKey, error) {
+	return s.base.UpdateClientAPIKey(ctx, input)
 }
 
 func (s *stubStoreWithUpstream) ListProviderKeys(ctx context.Context) ([]entity.ProviderKey, error) {
@@ -839,15 +981,9 @@ func (s *stubStoreWithUpstream) ListEnabledModels(ctx context.Context) ([]entity
 func (s *stubStoreWithUpstream) ResolveModelRoute(_ context.Context, publicName string) (entity.ModelRoute, error) {
 	for _, item := range s.base.models {
 		if item.PublicName == publicName && item.IsEnabled {
-			return entity.ModelRoute{
-				Model: item,
-				Provider: entity.Provider{
-					ID:      item.ProviderID,
-					Name:    item.ProviderName,
-					BaseURL: s.upstream,
-					Status:  "active",
-				},
-				Keys: []entity.ProviderKey{
+			keys := s.keys
+			if len(keys) == 0 {
+				keys = []entity.ProviderKey{
 					{
 						ID:         1,
 						ProviderID: item.ProviderID,
@@ -857,12 +993,27 @@ func (s *stubStoreWithUpstream) ResolveModelRoute(_ context.Context, publicName 
 						Priority:   100,
 						Weight:     100,
 					},
+				}
+			}
+
+			return entity.ModelRoute{
+				Model: item,
+				Provider: entity.Provider{
+					ID:      item.ProviderID,
+					Name:    item.ProviderName,
+					BaseURL: s.upstream,
+					Status:  "active",
 				},
+				Keys: keys,
 			}, nil
 		}
 	}
 
 	return entity.ModelRoute{}, context.Canceled
+}
+
+func (s *stubStoreWithUpstream) AuthenticateClientAPIKey(ctx context.Context, rawKey string) (entity.ClientAPIKey, error) {
+	return s.base.AuthenticateClientAPIKey(ctx, rawKey)
 }
 
 func (s *stubStoreWithUpstream) ListRequestLogs(ctx context.Context, input entity.ListRequestLogsInput) (entity.RequestLogPage, error) {
@@ -883,4 +1034,356 @@ func (s *stubStoreWithUpstream) CreateRequestLog(ctx context.Context, input enti
 
 func (s *stubStoreWithUpstream) GetDashboardStats(ctx context.Context) (entity.DashboardStats, error) {
 	return s.base.GetDashboardStats(ctx)
+}
+
+func TestChatCompletionsFailoverToNextKey(t *testing.T) {
+	requestCount := 0
+	authHeaders := make([]string, 0, 2)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		authHeaders = append(authHeaders, r.Header.Get("Authorization"))
+
+		w.Header().Set("Content-Type", "application/json")
+		if requestCount == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error": map[string]any{
+					"message": "rate limited",
+					"type":    "rate_limit_error",
+				},
+			})
+			return
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "chatcmpl-failover",
+		})
+	}))
+	defer upstream.Close()
+
+	cfg := config.Config{AppName: "wcstransfer-gateway", Env: "test", GinMode: "test", HTTPPort: "8080"}
+	store := &stubStore{
+		models: []entity.Model{
+			{
+				ID:             1,
+				PublicName:     "qwen-plus",
+				ProviderID:     1,
+				ProviderName:   "stub-provider",
+				UpstreamModel:  "qwen-plus-upstream",
+				RouteStrategy:  "failover",
+				IsEnabled:      true,
+				TimeoutSeconds: 30,
+			},
+		},
+	}
+
+	body, err := json.Marshal(map[string]any{
+		"model": "qwen-plus",
+		"messages": []map[string]string{
+			{"role": "user", "content": "hello"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	routeStore := &stubStoreWithUpstream{
+		base:     store,
+		upstream: upstream.URL + "/v1",
+		keys: []entity.ProviderKey{
+			{ID: 1, ProviderID: 1, Name: "primary", APIKey: "sk-primary", Status: "active", Priority: 10, Weight: 100},
+			{ID: 2, ProviderID: 1, Name: "backup", APIKey: "sk-backup", Status: "active", Priority: 20, Weight: 100},
+		},
+	}
+	engine := New(cfg, &platform.Dependencies{}, &Stores{
+		Admin:  routeStore,
+		Log:    routeStore,
+		Public: routeStore,
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
+	}
+	if requestCount != 2 {
+		t.Fatalf("expected 2 upstream attempts, got %d", requestCount)
+	}
+	if len(authHeaders) != 2 || authHeaders[0] != "Bearer sk-primary" || authHeaders[1] != "Bearer sk-backup" {
+		t.Fatalf("unexpected auth header sequence: %+v", authHeaders)
+	}
+	if len(store.createdLogs) != 1 {
+		t.Fatalf("expected 1 created log, got %d", len(store.createdLogs))
+	}
+	if !store.createdLogs[0].Success || store.createdLogs[0].ProviderKeyID != 2 {
+		t.Fatalf("expected successful failover log, got %+v", store.createdLogs[0])
+	}
+	if !strings.Contains(string(store.createdLogs[0].Metadata), "\"failover_count\":1") {
+		t.Fatalf("expected failover metadata, got %s", string(store.createdLogs[0].Metadata))
+	}
+}
+
+func TestChatCompletionsRetryLastKeyOnTransientFailure(t *testing.T) {
+	requestCount := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		w.Header().Set("Content-Type", "application/json")
+		if requestCount == 1 {
+			w.WriteHeader(http.StatusBadGateway)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error": map[string]any{
+					"message": "temporary upstream issue",
+					"type":    "server_error",
+				},
+			})
+			return
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "chatcmpl-retry",
+		})
+	}))
+	defer upstream.Close()
+
+	cfg := config.Config{AppName: "wcstransfer-gateway", Env: "test", GinMode: "test", HTTPPort: "8080"}
+	store := &stubStore{
+		models: []entity.Model{
+			{
+				ID:             1,
+				PublicName:     "gpt-4o-mini",
+				ProviderID:     1,
+				ProviderName:   "stub-provider",
+				UpstreamModel:  "gpt-4o-mini-upstream",
+				RouteStrategy:  "fixed",
+				IsEnabled:      true,
+				TimeoutSeconds: 30,
+			},
+		},
+	}
+
+	body, err := json.Marshal(map[string]any{
+		"model": "gpt-4o-mini",
+		"messages": []map[string]string{
+			{"role": "user", "content": "hello"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	routeStore := &stubStoreWithUpstream{
+		base:     store,
+		upstream: upstream.URL + "/v1",
+		keys: []entity.ProviderKey{
+			{ID: 1, ProviderID: 1, Name: "default", APIKey: "sk-test-secret", Status: "active", Priority: 10, Weight: 100},
+		},
+	}
+	engine := New(cfg, &platform.Dependencies{}, &Stores{
+		Admin:  routeStore,
+		Log:    routeStore,
+		Public: routeStore,
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
+	}
+	if requestCount != 2 {
+		t.Fatalf("expected 2 upstream attempts, got %d", requestCount)
+	}
+	if len(store.createdLogs) != 1 {
+		t.Fatalf("expected 1 created log, got %d", len(store.createdLogs))
+	}
+	if !store.createdLogs[0].Success || store.createdLogs[0].ProviderKeyID != 1 {
+		t.Fatalf("expected successful retry log, got %+v", store.createdLogs[0])
+	}
+	if !strings.Contains(string(store.createdLogs[0].Metadata), "\"retry_count\":1") {
+		t.Fatalf("expected retry metadata, got %s", string(store.createdLogs[0].Metadata))
+	}
+}
+
+func TestChatCompletionsSkipsCoolingDownKeyOnNextRequest(t *testing.T) {
+	requestCount := 0
+	authHeaders := make([]string, 0, 3)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		authHeaders = append(authHeaders, r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "application/json")
+
+		if requestCount == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error": map[string]any{
+					"message": "primary rate limited",
+					"type":    "rate_limit_error",
+				},
+			})
+			return
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "chatcmpl-ok",
+		})
+	}))
+	defer upstream.Close()
+
+	cfg := config.Config{AppName: "wcstransfer-gateway", Env: "test", GinMode: "test", HTTPPort: "8080"}
+	store := &stubStore{
+		models: []entity.Model{
+			{
+				ID:             1,
+				PublicName:     "qwen-max",
+				ProviderID:     1,
+				ProviderName:   "stub-provider",
+				UpstreamModel:  "qwen-max-upstream",
+				RouteStrategy:  "failover",
+				IsEnabled:      true,
+				TimeoutSeconds: 30,
+			},
+		},
+		providerKeys: []entity.ProviderKey{
+			{ID: 1, ProviderID: 1, ProviderName: "stub-provider", Name: "primary", Status: "active", Weight: 100, Priority: 10, MaskedAPIKey: "sk-p***ary"},
+			{ID: 2, ProviderID: 1, ProviderName: "stub-provider", Name: "backup", Status: "active", Weight: 100, Priority: 20, MaskedAPIKey: "sk-b***kup"},
+		},
+	}
+
+	body, err := json.Marshal(map[string]any{
+		"model": "qwen-max",
+		"messages": []map[string]string{
+			{"role": "user", "content": "hello"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	routeStore := &stubStoreWithUpstream{
+		base:     store,
+		upstream: upstream.URL + "/v1",
+		keys: []entity.ProviderKey{
+			{ID: 1, ProviderID: 1, Name: "primary", APIKey: "sk-primary", Status: "active", Priority: 10, Weight: 100},
+			{ID: 2, ProviderID: 1, Name: "backup", APIKey: "sk-backup", Status: "active", Priority: 20, Weight: 100},
+		},
+	}
+	engine := New(cfg, &platform.Dependencies{}, &Stores{
+		Admin:  routeStore,
+		Log:    routeStore,
+		Public: routeStore,
+	})
+
+	for i := 0; i < 2; i++ {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		engine.ServeHTTP(recorder, request)
+
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("request %d expected status %d, got %d", i+1, http.StatusOK, recorder.Code)
+		}
+	}
+
+	if requestCount != 3 {
+		t.Fatalf("expected 3 upstream requests, got %d", requestCount)
+	}
+	expectedHeaders := []string{"Bearer sk-primary", "Bearer sk-backup", "Bearer sk-backup"}
+	if strings.Join(authHeaders, ",") != strings.Join(expectedHeaders, ",") {
+		t.Fatalf("unexpected auth header sequence: %+v", authHeaders)
+	}
+	if len(store.createdLogs) != 2 {
+		t.Fatalf("expected 2 created logs, got %d", len(store.createdLogs))
+	}
+	if !strings.Contains(string(store.createdLogs[1].Metadata), "\"temporarily_skipped_keys\"") {
+		t.Fatalf("expected skipped key metadata, got %s", string(store.createdLogs[1].Metadata))
+	}
+
+	keysRecorder := httptest.NewRecorder()
+	keysRequest := httptest.NewRequest(http.MethodGet, "/admin/keys", nil)
+	engine.ServeHTTP(keysRecorder, keysRequest)
+
+	if keysRecorder.Code != http.StatusOK {
+		t.Fatalf("expected admin keys status %d, got %d", http.StatusOK, keysRecorder.Code)
+	}
+	if !strings.Contains(keysRecorder.Body.String(), "\"health_status\":\"cooldown\"") || !strings.Contains(keysRecorder.Body.String(), "\"cooldown_reason\":\"rate_limited\"") {
+		t.Fatalf("expected cooldown key in admin response, got %s", keysRecorder.Body.String())
+	}
+}
+
+func TestAdminDebugChatCompletionsUsesSelectedKey(t *testing.T) {
+	authHeaders := make([]string, 0, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authHeaders = append(authHeaders, r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "chatcmpl-debug",
+		})
+	}))
+	defer upstream.Close()
+
+	cfg := config.Config{AppName: "wcstransfer-gateway", Env: "test", GinMode: "test", HTTPPort: "8080"}
+	store := &stubStore{
+		models: []entity.Model{
+			{
+				ID:             1,
+				PublicName:     "qwen-plus",
+				ProviderID:     1,
+				ProviderName:   "stub-provider",
+				UpstreamModel:  "qwen-plus-upstream",
+				RouteStrategy:  "round_robin",
+				IsEnabled:      true,
+				TimeoutSeconds: 30,
+			},
+		},
+	}
+
+	requestBody, err := json.Marshal(map[string]any{
+		"provider_key_id": 2,
+		"payload": map[string]any{
+			"model": "qwen-plus",
+			"messages": []map[string]string{
+				{"role": "user", "content": "hello"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal debug body: %v", err)
+	}
+
+	routeStore := &stubStoreWithUpstream{
+		base:     store,
+		upstream: upstream.URL + "/v1",
+		keys: []entity.ProviderKey{
+			{ID: 1, ProviderID: 1, Name: "primary", APIKey: "sk-primary", Status: "active", Priority: 10, Weight: 100},
+			{ID: 2, ProviderID: 1, Name: "backup", APIKey: "sk-backup", Status: "active", Priority: 20, Weight: 100},
+		},
+	}
+	engine := New(cfg, &platform.Dependencies{}, &Stores{
+		Admin:  routeStore,
+		Log:    routeStore,
+		Public: routeStore,
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/admin/debug/chat/completions", bytes.NewReader(requestBody))
+	request.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
+	}
+	if len(authHeaders) != 1 || authHeaders[0] != "Bearer sk-backup" {
+		t.Fatalf("expected backup key authorization, got %+v", authHeaders)
+	}
+	if got := recorder.Header().Get("X-Wcs-Debug-Provider-Key-Id"); got != "2" {
+		t.Fatalf("expected selected provider key header, got %s", got)
+	}
+	if got := recorder.Header().Get("X-Wcs-Debug-Route-Strategy"); got != "fixed" {
+		t.Fatalf("expected fixed strategy header after key override, got %s", got)
+	}
 }

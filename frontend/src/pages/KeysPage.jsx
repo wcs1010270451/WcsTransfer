@@ -106,6 +106,21 @@ export default function KeysPage() {
     }
   };
 
+  const renderGatewayHealth = (_, record) => {
+    if (record.health_status === "cooldown") {
+      return (
+        <Space direction="vertical" size={2}>
+          <Tag color="orange">cooldown</Tag>
+          <span style={{ color: "#8c8c8c", fontSize: 12 }}>
+            {record.cooldown_reason || "temporary"} until {record.cooldown_until ? new Date(record.cooldown_until).toLocaleString() : "-"}
+          </span>
+        </Space>
+      );
+    }
+
+    return <Tag color="green">healthy</Tag>;
+  };
+
   return (
     <Space direction="vertical" size={24} style={{ width: "100%" }}>
       <PageHeaderCard
@@ -132,10 +147,21 @@ export default function KeysPage() {
             { title: "Weight", dataIndex: "weight", key: "weight" },
             { title: "Priority", dataIndex: "priority", key: "priority" },
             {
+              title: "Gateway Health",
+              key: "health_status",
+              render: renderGatewayHealth,
+            },
+            {
               title: "Status",
               dataIndex: "status",
               key: "status",
               render: (value) => <Tag color={value === "active" ? "green" : value === "disabled" ? "default" : "gold"}>{value}</Tag>,
+            },
+            {
+              title: "Last Error",
+              dataIndex: "last_error_message",
+              key: "last_error_message",
+              render: (value) => value || "-",
             },
             {
               title: "Actions",

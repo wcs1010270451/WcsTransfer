@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,16 +19,27 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"wcstransfer/backend/internal/entity"
+	"wcstransfer/backend/internal/middleware"
 	"wcstransfer/backend/internal/repository"
+	"wcstransfer/backend/internal/service/clientquota"
+	"wcstransfer/backend/internal/service/keyhealth"
 )
 
 const maxLoggedPayloadBytes = 64 * 1024
+
+const (
+	keyCooldownTransient    = 10 * time.Second
+	keyCooldownRateLimited  = 30 * time.Second
+	keyCooldownUnauthorized = 10 * time.Minute
+)
 
 type Handler struct {
 	store      repository.PublicModelStore
 	logWriter  repository.RequestLogWriter
 	httpClient *http.Client
 	counters   sync.Map
+	keyHealth  *keyhealth.Tracker
+	quota      *clientquota.Service
 }
 
 type chatLogState struct {
@@ -37,6 +49,8 @@ type chatLogState struct {
 	upstreamModel    string
 	providerID       int64
 	providerKeyID    int64
+	clientAPIKeyID   int64
+	clientAPIKeyName string
 	clientIP         string
 	requestMethod    string
 	requestPath      string
@@ -54,20 +68,47 @@ type chatLogState struct {
 	metadata         map[string]any
 }
 
+type proxyAttempt struct {
+	Key   entity.ProviderKey
+	Phase string
+}
+
+type chatCompletionOptions struct {
+	RequestBody      []byte
+	RequestType      string
+	RouteStrategy    string
+	ProviderKeyID    int64
+	IgnoreKeyHealth  bool
+	EmitDebugHeaders bool
+}
+
+type adminDebugChatRequest struct {
+	Payload       json.RawMessage `json:"payload" binding:"required"`
+	ProviderKeyID int64           `json:"provider_key_id"`
+	RouteStrategy string          `json:"route_strategy"`
+}
+
 func NewHandler(
 	store repository.PublicModelStore,
 	logWriter repository.RequestLogWriter,
 	httpClient *http.Client,
+	tracker *keyhealth.Tracker,
+	quota *clientquota.Service,
 ) *Handler {
 	client := httpClient
 	if client == nil {
 		client = &http.Client{}
+	}
+	if tracker == nil {
+		tracker = keyhealth.NewTracker()
 	}
 
 	return &Handler{
 		store:      store,
 		logWriter:  logWriter,
 		httpClient: client,
+		keyHealth:  tracker,
+		quota:      quota,
 	}
 }
 
@@ -103,10 +144,49 @@ func (h *Handler) ListModels(c *gin.Context) {
 }
 
 func (h *Handler) ChatCompletions(c *gin.Context) {
+	h.handleChatCompletions(c, chatCompletionOptions{
+		RequestType: "chat_completions",
+	})
+}
+
+func (h *Handler) AdminDebugChatCompletions(c *gin.Context) {
+	var request adminDebugChatRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": gin.H{
+				"message": "invalid request body",
+				"type":    "invalid_request",
+			},
+		})
+		return
+	}
+
+	routeStrategy := strings.TrimSpace(request.RouteStrategy)
+	if routeStrategy != "" && !isSupportedRouteStrategy(routeStrategy) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": gin.H{
+				"message": "route_strategy must be one of fixed, failover, round_robin",
+				"type":    "invalid_request",
+			},
+		})
+		return
+	}
+
+	h.handleChatCompletions(c, chatCompletionOptions{
+		RequestBody:      request.Payload,
+		RequestType:      "chat_completions_debug",
+		RouteStrategy:    routeStrategy,
+		ProviderKeyID:    request.ProviderKeyID,
+		IgnoreKeyHealth:  request.ProviderKeyID > 0,
+		EmitDebugHeaders: true,
+	})
+}
+
+func (h *Handler) handleChatCompletions(c *gin.Context, options chatCompletionOptions) {
 	startedAt := time.Now()
 	logState := chatLogState{
 		traceID:       strings.TrimSpace(c.Writer.Header().Get("X-Request-Id")),
-		requestType:   "chat_completions",
+		requestType:   firstNonEmpty(options.RequestType, "chat_completions"),
 		clientIP:      c.ClientIP(),
 		requestMethod: c.Request.Method,
 		requestPath:   c.FullPath(),
@@ -114,69 +194,60 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 			"stream": false,
 		},
 	}
+	if clientKey, ok := middleware.ClientAPIKeyFromContext(c); ok {
+		logState.clientAPIKeyID = clientKey.ID
+		logState.clientAPIKeyName = clientKey.Name
+		logState.metadata["client_api_key_name"] = clientKey.Name
+		defer func(key entity.ClientAPIKey) {
+			if logState.totalTokens > 0 {
+				_ = h.quota.AddTokenUsage(c.Request.Context(), key, logState.totalTokens)
+			}
+		}(clientKey)
+	}
 
 	defer func() {
 		h.writeRequestLog(c.Request.Context(), startedAt, logState)
 	}()
 
-	if h.store == nil {
-		logState.httpStatus = http.StatusServiceUnavailable
-		logState.errorType = "service_unavailable"
-		logState.errorMessage = "model store is not configured"
+	writeJSONError := func(statusCode int, errorType string, message string) {
+		logState.httpStatus = statusCode
+		logState.errorType = errorType
+		logState.errorMessage = message
 		logState.responsePayload = wrappedPayloadJSON(map[string]any{
 			"error": map[string]any{
-				"message": logState.errorMessage,
-				"type":    logState.errorType,
+				"message": message,
+				"type":    errorType,
 			},
 		})
-		c.JSON(http.StatusServiceUnavailable, gin.H{
+		h.writeDebugHeaders(c.Writer.Header(), logState, options)
+		c.JSON(statusCode, gin.H{
 			"error": gin.H{
-				"message": logState.errorMessage,
-				"type":    logState.errorType,
+				"message": message,
+				"type":    errorType,
 			},
 		})
+	}
+
+	if h.store == nil {
+		writeJSONError(http.StatusServiceUnavailable, "service_unavailable", "model store is not configured")
 		return
 	}
 
-	body, err := io.ReadAll(c.Request.Body)
-	if err != nil {
-		logState.httpStatus = http.StatusBadRequest
-		logState.errorType = "invalid_request"
-		logState.errorMessage = "failed to read request body"
-		logState.responsePayload = wrappedPayloadJSON(map[string]any{
-			"error": map[string]any{
-				"message": logState.errorMessage,
-				"type":    logState.errorType,
-			},
-		})
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": gin.H{
-				"message": logState.errorMessage,
-				"type":    logState.errorType,
-			},
-		})
-		return
+	body := options.RequestBody
+	if len(body) == 0 {
+		var err error
+		body, err = io.ReadAll(c.Request.Body)
+		if err != nil {
+			writeJSONError(http.StatusBadRequest, "invalid_request", "failed to read request body")
+			return
+		}
 	}
 
 	logState.requestPayload = payloadForStorage(body, "application/json", false)
 
 	payload, publicModel, err := parseChatCompletionPayload(body)
 	if err != nil {
-		logState.httpStatus = http.StatusBadRequest
-		logState.errorType = "invalid_request"
-		logState.errorMessage = err.Error()
-		logState.responsePayload = wrappedPayloadJSON(map[string]any{
-			"error": map[string]any{
-				"message": logState.errorMessage,
-				"type":    logState.errorType,
-			},
-		})
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": gin.H{
-				"message": logState.errorMessage,
-				"type":    logState.errorType,
-			},
-		})
+		writeJSONError(http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
 	logState.modelPublicName = publicModel
@@ -191,39 +262,11 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 	route, err := h.store.ResolveModelRoute(c.Request.Context(), publicModel)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			logState.httpStatus = http.StatusNotFound
-			logState.errorType = "not_found"
-			logState.errorMessage = "model not found or unavailable"
-			logState.responsePayload = wrappedPayloadJSON(map[string]any{
-				"error": map[string]any{
-					"message": logState.errorMessage,
-					"type":    logState.errorType,
-				},
-			})
-			c.JSON(http.StatusNotFound, gin.H{
-				"error": gin.H{
-					"message": logState.errorMessage,
-					"type":    logState.errorType,
-				},
-			})
+			writeJSONError(http.StatusNotFound, "not_found", "model not found or unavailable")
 			return
 		}
 
-		logState.httpStatus = http.StatusInternalServerError
-		logState.errorType = "database_error"
-		logState.errorMessage = err.Error()
-		logState.responsePayload = wrappedPayloadJSON(map[string]any{
-			"error": map[string]any{
-				"message": logState.errorMessage,
-				"type":    logState.errorType,
-			},
-		})
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": gin.H{
-				"message": logState.errorMessage,
-				"type":    logState.errorType,
-			},
-		})
+		writeJSONError(http.StatusInternalServerError, "database_error", err.Error())
 		return
 	}
 
@@ -233,28 +276,21 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 	logState.metadata["provider_type"] = route.Provider.ProviderType
 	logState.metadata["route_strategy"] = route.Model.RouteStrategy
 
-	selectedKey, err := h.selectKey(route)
+	route, err = applyChatRouteOptions(route, options, logState.metadata)
 	if err != nil {
-		logState.httpStatus = http.StatusServiceUnavailable
-		logState.errorType = "routing_error"
-		logState.errorMessage = err.Error()
-		logState.responsePayload = wrappedPayloadJSON(map[string]any{
-			"error": map[string]any{
-				"message": logState.errorMessage,
-				"type":    logState.errorType,
-			},
-		})
-		c.JSON(http.StatusServiceUnavailable, gin.H{
-			"error": gin.H{
-				"message": logState.errorMessage,
-				"type":    logState.errorType,
-			},
-		})
+		writeJSONError(http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
 
-	logState.providerKeyID = selectedKey.ID
-	logState.metadata["provider_key_name"] = selectedKey.Name
+	attempts, skippedKeys, err := h.buildProxyAttempts(route, options.IgnoreKeyHealth)
+	if err != nil {
+		writeJSONError(http.StatusServiceUnavailable, "routing_error", err.Error())
+		return
+	}
+	logState.metadata["candidate_key_count"] = len(route.Keys)
+	if len(skippedKeys) > 0 {
+		logState.metadata["temporarily_skipped_keys"] = skippedKeys
+	}
 
 	payload["model"] = route.Model.UpstreamModel
 	if route.Model.MaxTokens > 0 {
@@ -268,21 +304,7 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 
 	rewrittenBody, err := json.Marshal(payload)
 	if err != nil {
-		logState.httpStatus = http.StatusInternalServerError
-		logState.errorType = "internal_error"
-		logState.errorMessage = "failed to encode upstream payload"
-		logState.responsePayload = wrappedPayloadJSON(map[string]any{
-			"error": map[string]any{
-				"message": logState.errorMessage,
-				"type":    logState.errorType,
-			},
-		})
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": gin.H{
-				"message": logState.errorMessage,
-				"type":    logState.errorType,
-			},
-		})
+		writeJSONError(http.StatusInternalServerError, "internal_error", "failed to encode upstream payload")
 		return
 	}
 
@@ -294,112 +316,159 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), timeout)
 	defer cancel()
 
-	upstreamRequest, err := http.NewRequestWithContext(
-		ctx,
-		http.MethodPost,
-		buildUpstreamURL(route.Provider.BaseURL, "/chat/completions"),
-		bytes.NewReader(rewrittenBody),
-	)
-	if err != nil {
-		logState.httpStatus = http.StatusInternalServerError
-		logState.errorType = "internal_error"
-		logState.errorMessage = "failed to create upstream request"
-		logState.responsePayload = wrappedPayloadJSON(map[string]any{
-			"error": map[string]any{
-				"message": logState.errorMessage,
-				"type":    logState.errorType,
-			},
-		})
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": gin.H{
-				"message": logState.errorMessage,
-				"type":    logState.errorType,
-			},
-		})
-		return
-	}
+	failoverCount := 0
+	retryCount := 0
+	attemptMetadata := make([]map[string]any, 0, len(attempts))
+	logState.metadata["routing_attempts"] = attemptMetadata
 
-	upstreamRequest.Header.Set("Authorization", "Bearer "+selectedKey.APIKey)
-	upstreamRequest.Header.Set("Content-Type", contentTypeOrDefault(c.GetHeader("Content-Type"), "application/json"))
-	upstreamRequest.Header.Set("Accept", contentTypeOrDefault(c.GetHeader("Accept"), "application/json"))
-	copyOptionalHeader(c, upstreamRequest, "OpenAI-Beta")
+	for attemptIndex, attempt := range attempts {
+		hasNextAttempt := attemptIndex < len(attempts)-1
+		nextUsesSameKey := false
+		if hasNextAttempt {
+			nextUsesSameKey = attempts[attemptIndex+1].Key.ID == attempt.Key.ID
+		}
+		logState.providerKeyID = attempt.Key.ID
+		logState.metadata["provider_key_name"] = attempt.Key.Name
 
-	response, err := h.httpClient.Do(upstreamRequest)
-	if err != nil {
-		logState.httpStatus = http.StatusBadGateway
-		logState.errorType = "upstream_error"
-		logState.errorMessage = err.Error()
-		logState.responsePayload = wrappedPayloadJSON(map[string]any{
-			"error": map[string]any{
-				"message": logState.errorMessage,
-				"type":    logState.errorType,
-			},
-		})
-		c.JSON(http.StatusBadGateway, gin.H{
-			"error": gin.H{
-				"message": logState.errorMessage,
-				"type":    logState.errorType,
-			},
-		})
-		return
-	}
-	defer response.Body.Close()
+		upstreamRequest, err := http.NewRequestWithContext(
+			ctx,
+			http.MethodPost,
+			buildUpstreamURL(route.Provider.BaseURL, "/chat/completions"),
+			bytes.NewReader(rewrittenBody),
+		)
+		if err != nil {
+			writeJSONError(http.StatusInternalServerError, "internal_error", "failed to create upstream request")
+			return
+		}
 
-	responseContentType := response.Header.Get("Content-Type")
-	logState.httpStatus = response.StatusCode
-	logState.success = response.StatusCode >= 200 && response.StatusCode < 300
-	logState.metadata["response_content_type"] = responseContentType
+		upstreamRequest.Header.Set("Authorization", "Bearer "+attempt.Key.APIKey)
+		upstreamRequest.Header.Set("Content-Type", contentTypeOrDefault(c.GetHeader("Content-Type"), "application/json"))
+		upstreamRequest.Header.Set("Accept", contentTypeOrDefault(c.GetHeader("Accept"), "application/json"))
+		copyOptionalHeader(c, upstreamRequest, "OpenAI-Beta")
 
-	copyResponseHeaders(c.Writer.Header(), response.Header)
-	c.Status(response.StatusCode)
+		attemptRecord := map[string]any{
+			"attempt":           attemptIndex + 1,
+			"phase":             attempt.Phase,
+			"provider_key_id":   attempt.Key.ID,
+			"provider_key_name": attempt.Key.Name,
+		}
 
-	if isStreamingResponse(responseContentType) {
-		logState.metadata["stream_response"] = true
-		preview, truncated, streamErr := streamUpstreamResponse(c, response.Body, logState.metadata, &logState)
-		logState.responsePayload = wrappedPayloadJSON(map[string]any{
-			"content_type": responseContentType,
-			"stream":       true,
-			"truncated":    truncated,
-			"preview":      string(preview),
-		})
-		if streamErr != nil {
+		response, requestErr := h.httpClient.Do(upstreamRequest)
+		if requestErr != nil {
+			h.penalizeKey(attempt.Key.ID, keyCooldownTransient, "request_error")
+			attemptRecord["error_type"] = "upstream_error"
+			attemptRecord["error_message"] = requestErr.Error()
+			attemptRecord["retryable"] = true
+
+			if hasNextAttempt {
+				attemptRecord["decision"] = nextAttemptDecision(attempts[attemptIndex+1].Phase)
+				if attempts[attemptIndex+1].Key.ID == attempt.Key.ID {
+					retryCount++
+				} else {
+					failoverCount++
+				}
+				attemptMetadata = append(attemptMetadata, attemptRecord)
+				continue
+			}
+
+			attemptRecord["decision"] = "return_error"
+			attemptMetadata = append(attemptMetadata, attemptRecord)
+			logState.metadata["routing_attempts"] = attemptMetadata
+			logState.metadata["failover_count"] = failoverCount
+			logState.metadata["retry_count"] = retryCount
+			writeJSONError(http.StatusBadGateway, "upstream_error", requestErr.Error())
+			return
+		}
+
+		responseContentType := response.Header.Get("Content-Type")
+		attemptRecord["http_status"] = response.StatusCode
+		attemptRecord["response_content_type"] = responseContentType
+
+		if shouldFailoverStatus(response.StatusCode) && hasNextAttempt && (!nextUsesSameKey || shouldRetryStatus(response.StatusCode)) {
+			responseBody, _ := io.ReadAll(response.Body)
+			_ = response.Body.Close()
+			h.applyStatusPenalty(attempt.Key.ID, response.StatusCode)
+			attemptRecord["error_type"] = "upstream_response_error"
+			attemptRecord["error_message"] = extractErrorMessage(responseBody)
+			attemptRecord["retryable"] = shouldRetryStatus(response.StatusCode)
+			attemptRecord["decision"] = nextAttemptDecision(attempts[attemptIndex+1].Phase)
+			attemptMetadata = append(attemptMetadata, attemptRecord)
+			if attempts[attemptIndex+1].Key.ID == attempt.Key.ID {
+				retryCount++
+			} else {
+				failoverCount++
+			}
+			continue
+		}
+
+		attemptRecord["decision"] = "return_response"
+		attemptMetadata = append(attemptMetadata, attemptRecord)
+		logState.metadata["routing_attempts"] = attemptMetadata
+		logState.metadata["failover_count"] = failoverCount
+		logState.metadata["retry_count"] = retryCount
+		logState.httpStatus = response.StatusCode
+		logState.success = response.StatusCode >= 200 && response.StatusCode < 300
+		logState.metadata["response_content_type"] = responseContentType
+		if logState.success {
+			h.clearKeyPenalty(attempt.Key.ID)
+		}
+
+		h.writeDebugHeaders(c.Writer.Header(), logState, options)
+		copyResponseHeaders(c.Writer.Header(), response.Header)
+		c.Status(response.StatusCode)
+
+		if isStreamingResponse(responseContentType) {
+			defer response.Body.Close()
+			logState.metadata["stream_response"] = true
+			preview, truncated, streamErr := streamUpstreamResponse(c, response.Body, logState.metadata, &logState)
+			logState.responsePayload = wrappedPayloadJSON(map[string]any{
+				"content_type": responseContentType,
+				"stream":       true,
+				"truncated":    truncated,
+				"preview":      string(preview),
+			})
+			if streamErr != nil {
+				logState.success = false
+				logState.errorType = "stream_proxy_error"
+				logState.errorMessage = streamErr.Error()
+			}
+			return
+		}
+
+		responseBody, readErr := io.ReadAll(response.Body)
+		_ = response.Body.Close()
+		if readErr != nil {
+			logState.httpStatus = http.StatusBadGateway
 			logState.success = false
-			logState.errorType = "stream_proxy_error"
-			logState.errorMessage = streamErr.Error()
+			logState.errorType = "upstream_read_error"
+			logState.errorMessage = readErr.Error()
+			logState.responsePayload = wrappedPayloadJSON(map[string]any{
+				"error": map[string]any{
+					"message": logState.errorMessage,
+					"type":    logState.errorType,
+				},
+			})
+			c.Writer.Header().Set("Content-Type", "application/json")
+			h.writeDebugHeaders(c.Writer.Header(), logState, options)
+			c.Status(http.StatusBadGateway)
+			_, _ = c.Writer.Write(logState.responsePayload)
+			return
+		}
+
+		logState.responsePayload = payloadForStorage(responseBody, responseContentType, streamRequested)
+		if !logState.success && logState.errorType == "" {
+			logState.errorType = "upstream_response_error"
+			logState.errorMessage = extractErrorMessage(responseBody)
+		}
+
+		applyUsage(logState.metadata, &logState, responseBody)
+
+		if _, err := c.Writer.Write(responseBody); err != nil {
+			logState.success = false
+			logState.errorType = "client_write_error"
+			logState.errorMessage = err.Error()
 		}
 		return
-	}
-
-	responseBody, readErr := io.ReadAll(response.Body)
-	if readErr != nil {
-		logState.httpStatus = http.StatusBadGateway
-		logState.success = false
-		logState.errorType = "upstream_read_error"
-		logState.errorMessage = readErr.Error()
-		logState.responsePayload = wrappedPayloadJSON(map[string]any{
-			"error": map[string]any{
-				"message": logState.errorMessage,
-				"type":    logState.errorType,
-			},
-		})
-		c.Writer.Header().Set("Content-Type", "application/json")
-		c.Status(http.StatusBadGateway)
-		_, _ = c.Writer.Write(logState.responsePayload)
-		return
-	}
-
-	logState.responsePayload = payloadForStorage(responseBody, responseContentType, streamRequested)
-	if !logState.success && logState.errorType == "" {
-		logState.errorType = "upstream_response_error"
-		logState.errorMessage = extractErrorMessage(responseBody)
-	}
-
-	applyUsage(logState.metadata, &logState, responseBody)
-
-	if _, err := c.Writer.Write(responseBody); err != nil {
-		logState.success = false
-		logState.errorType = "client_write_error"
-		logState.errorMessage = err.Error()
 	}
 }
 
@@ -422,9 +491,9 @@ func parseChatCompletionPayload(body []byte) (map[string]any, string, error) {
 	return payload, strings.TrimSpace(modelName), nil
 }
 
-func (h *Handler) selectKey(route entity.ModelRoute) (entity.ProviderKey, error) {
+func (h *Handler) orderedKeys(route entity.ModelRoute, ignoreKeyHealth bool) ([]entity.ProviderKey, []map[string]any, error) {
 	if len(route.Keys) == 0 {
-		return entity.ProviderKey{}, errors.New("no active provider key is available for the requested model")
+		return nil, nil, errors.New("no active provider key is available for the requested model")
 	}
 
 	keys := append([]entity.ProviderKey(nil), route.Keys...)
@@ -442,10 +511,200 @@ func (h *Handler) selectKey(route entity.ModelRoute) (entity.ProviderKey, error)
 		counterValue, _ := h.counters.LoadOrStore(route.Model.PublicName, &atomic.Uint64{})
 		counter := counterValue.(*atomic.Uint64)
 		index := int(counter.Add(1)-1) % len(keys)
-		return keys[index], nil
+		rotated := append([]entity.ProviderKey{}, keys[index:]...)
+		rotated = append(rotated, keys[:index]...)
+		keys = rotated
 	}
 
-	return keys[0], nil
+	if ignoreKeyHealth {
+		return keys, nil, nil
+	}
+
+	filtered := make([]entity.ProviderKey, 0, len(keys))
+	skipped := make([]map[string]any, 0)
+	now := time.Now()
+	for _, key := range keys {
+		penalty, penalized := h.currentKeyPenalty(key.ID, now)
+		if !penalized {
+			filtered = append(filtered, key)
+			continue
+		}
+
+		skipped = append(skipped, map[string]any{
+			"provider_key_id":   key.ID,
+			"provider_key_name": key.Name,
+			"reason":            penalty.Reason,
+			"blocked_until":     penalty.Until.UTC().Format(time.RFC3339),
+		})
+	}
+
+	if len(filtered) == 0 {
+		return keys, skipped, nil
+	}
+
+	return filtered, skipped, nil
+}
+
+func (h *Handler) buildProxyAttempts(route entity.ModelRoute, ignoreKeyHealth bool) ([]proxyAttempt, []map[string]any, error) {
+	keys, skipped, err := h.orderedKeys(route, ignoreKeyHealth)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	attempts := make([]proxyAttempt, 0, len(keys)+1)
+	for _, key := range keys {
+		attempts = append(attempts, proxyAttempt{
+			Key:   key,
+			Phase: "primary",
+		})
+	}
+
+	lastKey := keys[len(keys)-1]
+	attempts = append(attempts, proxyAttempt{
+		Key:   lastKey,
+		Phase: "retry",
+	})
+
+	return attempts, skipped, nil
+}
+
+func applyChatRouteOptions(route entity.ModelRoute, options chatCompletionOptions, metadata map[string]any) (entity.ModelRoute, error) {
+	if options.RouteStrategy != "" {
+		route.Model.RouteStrategy = options.RouteStrategy
+		metadata["route_strategy"] = options.RouteStrategy
+		metadata["route_strategy_override"] = options.RouteStrategy
+	}
+
+	if options.ProviderKeyID <= 0 {
+		return route, nil
+	}
+
+	for _, key := range route.Keys {
+		if key.ID == options.ProviderKeyID {
+			route.Keys = []entity.ProviderKey{key}
+			route.Model.RouteStrategy = "fixed"
+			metadata["provider_key_override_id"] = key.ID
+			metadata["provider_key_override_name"] = key.Name
+			metadata["route_strategy"] = "fixed"
+			return route, nil
+		}
+	}
+
+	return route, errors.New("selected provider key is not available for the requested model")
+}
+
+func (h *Handler) currentKeyPenalty(keyID int64, now time.Time) (keyhealth.State, bool) {
+	if h.keyHealth == nil {
+		return keyhealth.State{}, false
+	}
+
+	return h.keyHealth.Current(keyID, now)
+}
+
+func (h *Handler) penalizeKey(keyID int64, duration time.Duration, reason string) {
+	if h.keyHealth == nil {
+		return
+	}
+
+	h.keyHealth.Penalize(keyID, duration, reason)
+}
+
+func (h *Handler) clearKeyPenalty(keyID int64) {
+	if h.keyHealth == nil {
+		return
+	}
+
+	h.keyHealth.Clear(keyID)
+}
+
+func (h *Handler) applyStatusPenalty(keyID int64, statusCode int) {
+	switch statusCode {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		h.penalizeKey(keyID, keyCooldownUnauthorized, "auth_error")
+	case http.StatusTooManyRequests:
+		h.penalizeKey(keyID, keyCooldownRateLimited, "rate_limited")
+	default:
+		if statusCode >= http.StatusInternalServerError {
+			h.penalizeKey(keyID, keyCooldownTransient, "upstream_error")
+		}
+	}
+}
+
+func shouldFailoverStatus(statusCode int) bool {
+	return statusCode == http.StatusUnauthorized ||
+		statusCode == http.StatusForbidden ||
+		statusCode == http.StatusTooManyRequests ||
+		statusCode >= http.StatusInternalServerError
+}
+
+func shouldRetryStatus(statusCode int) bool {
+	return statusCode == http.StatusTooManyRequests || statusCode >= http.StatusInternalServerError
+}
+
+func nextAttemptDecision(nextPhase string) string {
+	if nextPhase == "retry" {
+		return "retry"
+	}
+
+	return "failover"
+}
+
+func isSupportedRouteStrategy(value string) bool {
+	switch strings.TrimSpace(value) {
+	case "fixed", "failover", "round_robin":
+		return true
+	default:
+		return false
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+
+	return ""
+}
+
+func metadataInt(value any) int {
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case int64:
+		return int(typed)
+	case float64:
+		return int(typed)
+	default:
+		return 0
+	}
+}
+
+func intToString(value int) string {
+	return strconv.Itoa(value)
+}
+
+func int64ToString(value int64) string {
+	return strconv.FormatInt(value, 10)
+}
+
+func (h *Handler) writeDebugHeaders(headers http.Header, state chatLogState, options chatCompletionOptions) {
+	if !options.EmitDebugHeaders {
+		return
+	}
+
+	if state.providerKeyID > 0 {
+		headers.Set("X-Wcs-Debug-Provider-Key-Id", int64ToString(state.providerKeyID))
+	}
+	if keyName, ok := state.metadata["provider_key_name"].(string); ok && strings.TrimSpace(keyName) != "" {
+		headers.Set("X-Wcs-Debug-Provider-Key-Name", keyName)
+	}
+	if strategy, ok := state.metadata["route_strategy"].(string); ok && strings.TrimSpace(strategy) != "" {
+		headers.Set("X-Wcs-Debug-Route-Strategy", strategy)
+	}
+	headers.Set("X-Wcs-Debug-Retry-Count", intToString(metadataInt(state.metadata["retry_count"])))
+	headers.Set("X-Wcs-Debug-Failover-Count", intToString(metadataInt(state.metadata["failover_count"])))
 }
 
 func (h *Handler) writeRequestLog(ctx context.Context, startedAt time.Time, state chatLogState) {
@@ -466,6 +725,7 @@ func (h *Handler) writeRequestLog(ctx context.Context, startedAt time.Time, stat
 		UpstreamModel:    state.upstreamModel,
 		ProviderID:       state.providerID,
 		ProviderKeyID:    state.providerKeyID,
+		ClientAPIKeyID:   state.clientAPIKeyID,
 		ClientIP:         state.clientIP,
 		RequestMethod:    state.requestMethod,
 		RequestPath:      state.requestPath,

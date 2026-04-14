@@ -2,6 +2,9 @@ package postgres
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -143,6 +146,124 @@ RETURNING id, name, slug, provider_type, base_url, status, description, extra_co
 	}
 
 	item.ExtraConfig = normalizeJSON(rawConfig)
+	return item, nil
+}
+
+func (s *Store) ListClientAPIKeys(ctx context.Context) ([]entity.ClientAPIKey, error) {
+	const query = `
+SELECT id, name, masked_key, status, description, rpm_limit, daily_request_limit, daily_token_limit, expires_at, last_used_at, last_error_at, last_error_message, created_at, updated_at
+FROM client_api_keys
+ORDER BY id DESC`
+
+	rows, err := s.pool.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("query client api keys: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]entity.ClientAPIKey, 0)
+	for rows.Next() {
+		item, err := scanClientAPIKey(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate client api keys: %w", err)
+	}
+
+	return items, nil
+}
+
+func (s *Store) CreateClientAPIKey(ctx context.Context, input entity.CreateClientAPIKeyInput) (entity.ClientAPIKey, error) {
+	plainKey, keyHash, maskedKey, err := generateClientAPIKeyMaterial()
+	if err != nil {
+		return entity.ClientAPIKey{}, fmt.Errorf("generate client api key: %w", err)
+	}
+
+	const query = `
+INSERT INTO client_api_keys (name, key_hash, masked_key, status, description, rpm_limit, daily_request_limit, daily_token_limit, expires_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+RETURNING id, name, masked_key, status, description, rpm_limit, daily_request_limit, daily_token_limit, expires_at, last_used_at, last_error_at, last_error_message, created_at, updated_at`
+
+	var item entity.ClientAPIKey
+	err = s.pool.QueryRow(
+		ctx,
+		query,
+		input.Name,
+		keyHash,
+		maskedKey,
+		input.Status,
+		input.Description,
+		input.RPMLimit,
+		input.DailyRequestLimit,
+		input.DailyTokenLimit,
+		input.ExpiresAt,
+	).Scan(
+		&item.ID,
+		&item.Name,
+		&item.MaskedKey,
+		&item.Status,
+		&item.Description,
+		&item.ExpiresAt,
+		&item.LastUsedAt,
+		&item.LastErrorAt,
+		&item.LastErrorMessage,
+		&item.CreatedAt,
+		&item.UpdatedAt,
+	)
+	if err != nil {
+		return entity.ClientAPIKey{}, fmt.Errorf("insert client api key: %w", err)
+	}
+
+	item.PlainAPIKey = plainKey
+	return item, nil
+}
+
+func (s *Store) UpdateClientAPIKey(ctx context.Context, input entity.UpdateClientAPIKeyInput) (entity.ClientAPIKey, error) {
+	const query = `
+UPDATE client_api_keys
+SET name = $2,
+    status = $3,
+    description = $4,
+    rpm_limit = $5,
+    daily_request_limit = $6,
+    daily_token_limit = $7,
+    expires_at = $8
+WHERE id = $1
+RETURNING id, name, masked_key, status, description, rpm_limit, daily_request_limit, daily_token_limit, expires_at, last_used_at, last_error_at, last_error_message, created_at, updated_at`
+
+	var item entity.ClientAPIKey
+	err := s.pool.QueryRow(
+		ctx,
+		query,
+		input.ID,
+		input.Name,
+		input.Status,
+		input.Description,
+		input.RPMLimit,
+		input.DailyRequestLimit,
+		input.DailyTokenLimit,
+		input.ExpiresAt,
+	).Scan(
+		&item.ID,
+		&item.Name,
+		&item.MaskedKey,
+		&item.Status,
+		&item.Description,
+		&item.ExpiresAt,
+		&item.LastUsedAt,
+		&item.LastErrorAt,
+		&item.LastErrorMessage,
+		&item.CreatedAt,
+		&item.UpdatedAt,
+	)
+	if err != nil {
+		return entity.ClientAPIKey{}, fmt.Errorf("update client api key: %w", err)
+	}
+
 	return item, nil
 }
 
@@ -567,6 +688,39 @@ LIMIT 1`
 	return route, nil
 }
 
+func (s *Store) AuthenticateClientAPIKey(ctx context.Context, rawKey string) (entity.ClientAPIKey, error) {
+	const query = `
+UPDATE client_api_keys
+SET last_used_at = NOW()
+WHERE key_hash = $1
+  AND status = 'active'
+  AND (expires_at IS NULL OR expires_at > NOW())
+RETURNING id, name, masked_key, status, description, rpm_limit, daily_request_limit, daily_token_limit, expires_at, last_used_at, last_error_at, last_error_message, created_at, updated_at`
+
+	var item entity.ClientAPIKey
+	err := s.pool.QueryRow(ctx, query, hashClientAPIKey(rawKey)).Scan(
+		&item.ID,
+		&item.Name,
+		&item.MaskedKey,
+		&item.Status,
+		&item.Description,
+		&item.RPMLimit,
+		&item.DailyRequestLimit,
+		&item.DailyTokenLimit,
+		&item.ExpiresAt,
+		&item.LastUsedAt,
+		&item.LastErrorAt,
+		&item.LastErrorMessage,
+		&item.CreatedAt,
+		&item.UpdatedAt,
+	)
+	if err != nil {
+		return entity.ClientAPIKey{}, fmt.Errorf("authenticate client api key: %w", err)
+	}
+
+	return item, nil
+}
+
 func (s *Store) ListRequestLogs(ctx context.Context, input entity.ListRequestLogsInput) (entity.RequestLogPage, error) {
 	page := input.Page
 	if page <= 0 {
@@ -589,12 +743,14 @@ func (s *Store) ListRequestLogs(ctx context.Context, input entity.ListRequestLog
 	query := `
 SELECT rl.id, rl.trace_id, rl.request_type, rl.model_public_name, rl.upstream_model,
        COALESCE(rl.provider_id, 0), COALESCE(p.name, ''), COALESCE(rl.provider_key_id, 0), COALESCE(pk.name, ''),
+       COALESCE(rl.client_api_key_id, 0), COALESCE(cak.name, ''),
        COALESCE(HOST(rl.client_ip), ''), rl.request_method, rl.request_path, rl.http_status, rl.success, rl.latency_ms,
        rl.prompt_tokens, rl.completion_tokens, rl.total_tokens, rl.estimated_cost::float8, rl.error_type, rl.error_message,
        rl.created_at
 FROM request_logs rl
 LEFT JOIN providers p ON p.id = rl.provider_id
 LEFT JOIN provider_keys pk ON pk.id = rl.provider_key_id
+LEFT JOIN client_api_keys cak ON cak.id = rl.client_api_key_id
 ` + baseWhere + `
 ORDER BY rl.created_at DESC, rl.id DESC
 LIMIT $` + strconv.Itoa(len(args)-1) + ` OFFSET $` + strconv.Itoa(len(args))
@@ -618,6 +774,8 @@ LIMIT $` + strconv.Itoa(len(args)-1) + ` OFFSET $` + strconv.Itoa(len(args))
 			&item.ProviderName,
 			&item.ProviderKeyID,
 			&item.ProviderKeyName,
+			&item.ClientAPIKeyID,
+			&item.ClientAPIKeyName,
 			&item.ClientIP,
 			&item.RequestMethod,
 			&item.RequestPath,
@@ -654,12 +812,14 @@ func (s *Store) ExportRequestLogs(ctx context.Context, input entity.ListRequestL
 	query := `
 SELECT rl.id, rl.trace_id, rl.request_type, rl.model_public_name, rl.upstream_model,
        COALESCE(rl.provider_id, 0), COALESCE(p.name, ''), COALESCE(rl.provider_key_id, 0), COALESCE(pk.name, ''),
+       COALESCE(rl.client_api_key_id, 0), COALESCE(cak.name, ''),
        COALESCE(HOST(rl.client_ip), ''), rl.request_method, rl.request_path, rl.http_status, rl.success, rl.latency_ms,
        rl.prompt_tokens, rl.completion_tokens, rl.total_tokens, rl.estimated_cost::float8, rl.error_type, rl.error_message,
        rl.created_at
 FROM request_logs rl
 LEFT JOIN providers p ON p.id = rl.provider_id
 LEFT JOIN provider_keys pk ON pk.id = rl.provider_key_id
+LEFT JOIN client_api_keys cak ON cak.id = rl.client_api_key_id
 ` + baseWhere + `
 ORDER BY rl.created_at DESC, rl.id DESC
 LIMIT 5000`
@@ -677,12 +837,14 @@ func (s *Store) GetRequestLog(ctx context.Context, id int64) (entity.RequestLogD
 	const query = `
 SELECT rl.id, rl.trace_id, rl.request_type, rl.model_public_name, rl.upstream_model,
        COALESCE(rl.provider_id, 0), COALESCE(p.name, ''), COALESCE(rl.provider_key_id, 0), COALESCE(pk.name, ''),
+       COALESCE(rl.client_api_key_id, 0), COALESCE(cak.name, ''),
        COALESCE(HOST(rl.client_ip), ''), rl.request_method, rl.request_path, rl.http_status, rl.success, rl.latency_ms,
        rl.prompt_tokens, rl.completion_tokens, rl.total_tokens, rl.estimated_cost::float8, rl.error_type, rl.error_message,
        rl.created_at, rl.request_payload, rl.response_payload, rl.metadata
 FROM request_logs rl
 LEFT JOIN providers p ON p.id = rl.provider_id
 LEFT JOIN provider_keys pk ON pk.id = rl.provider_key_id
+LEFT JOIN client_api_keys cak ON cak.id = rl.client_api_key_id
 WHERE rl.id = $1`
 
 	var item entity.RequestLogDetail
@@ -696,6 +858,8 @@ WHERE rl.id = $1`
 		&item.ProviderName,
 		&item.ProviderKeyID,
 		&item.ProviderKeyName,
+		&item.ClientAPIKeyID,
+		&item.ClientAPIKeyName,
 		&item.ClientIP,
 		&item.RequestMethod,
 		&item.RequestPath,
@@ -877,13 +1041,13 @@ LIMIT 5`
 func (s *Store) CreateRequestLog(ctx context.Context, input entity.CreateRequestLogInput) error {
 	const query = `
 INSERT INTO request_logs (
-    trace_id, request_type, model_public_name, upstream_model, provider_id, provider_key_id,
+    trace_id, request_type, model_public_name, upstream_model, provider_id, provider_key_id, client_api_key_id,
     client_ip, request_method, request_path, http_status, success, latency_ms, prompt_tokens,
     completion_tokens, total_tokens, estimated_cost, error_type, error_message, request_payload,
     response_payload, metadata
 ) VALUES (
-    $1, $2, $3, $4, NULLIF($5, 0), NULLIF($6, 0), NULLIF($7, '')::inet, $8, $9, $10, $11, $12,
-    $13, $14, $15, $16, $17, $18, $19, $20, $21
+    $1, $2, $3, $4, NULLIF($5, 0), NULLIF($6, 0), NULLIF($7, 0), NULLIF($8, '')::inet, $9, $10, $11, $12, $13,
+    $14, $15, $16, $17, $18, $19, $20, $21, $22
 )`
 
 	_, err := s.pool.Exec(
@@ -895,6 +1059,7 @@ INSERT INTO request_logs (
 		input.UpstreamModel,
 		input.ProviderID,
 		input.ProviderKeyID,
+		input.ClientAPIKeyID,
 		input.ClientIP,
 		input.RequestMethod,
 		input.RequestPath,
@@ -929,6 +1094,57 @@ func normalizeJSON(input []byte) json.RawMessage {
 	}
 
 	return json.RawMessage(trimmed)
+}
+
+func generateClientAPIKeyMaterial() (string, string, string, error) {
+	buffer := make([]byte, 18)
+	if _, err := rand.Read(buffer); err != nil {
+		return "", "", "", err
+	}
+
+	suffix := hex.EncodeToString(buffer)
+	plainKey := "wcs_live_" + suffix
+	return plainKey, hashClientAPIKey(plainKey), maskClientKey(plainKey), nil
+}
+
+func hashClientAPIKey(value string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(value)))
+	return hex.EncodeToString(sum[:])
+}
+
+func maskClientKey(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if len(trimmed) <= 12 {
+		return trimmed
+	}
+
+	return trimmed[:12] + "..." + trimmed[len(trimmed)-4:]
+}
+
+func scanClientAPIKey(scanner interface {
+	Scan(dest ...any) error
+}) (entity.ClientAPIKey, error) {
+	var item entity.ClientAPIKey
+	if err := scanner.Scan(
+		&item.ID,
+		&item.Name,
+		&item.MaskedKey,
+		&item.Status,
+		&item.Description,
+		&item.RPMLimit,
+		&item.DailyRequestLimit,
+		&item.DailyTokenLimit,
+		&item.ExpiresAt,
+		&item.LastUsedAt,
+		&item.LastErrorAt,
+		&item.LastErrorMessage,
+		&item.CreatedAt,
+		&item.UpdatedAt,
+	); err != nil {
+		return entity.ClientAPIKey{}, fmt.Errorf("scan client api key: %w", err)
+	}
+
+	return item, nil
 }
 
 func (s *Store) listActiveProviderKeys(ctx context.Context, providerID int64) ([]entity.ProviderKey, error) {
@@ -1051,6 +1267,8 @@ func scanRequestLogs(rows pgx.Rows) ([]entity.RequestLog, error) {
 			&item.ProviderName,
 			&item.ProviderKeyID,
 			&item.ProviderKeyName,
+			&item.ClientAPIKeyID,
+			&item.ClientAPIKeyName,
 			&item.ClientIP,
 			&item.RequestMethod,
 			&item.RequestPath,
