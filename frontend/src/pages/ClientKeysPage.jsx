@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { App, Button, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, Typography } from "antd";
-import { createClientKey, fetchClientKeys, updateClientKey } from "../api/client";
+import { createClientKey, fetchClientKeys, fetchModels, updateClientKey } from "../api/client";
 import PageHeaderCard from "../components/PageHeaderCard";
 
 export default function ClientKeysPage() {
   const { message, modal } = App.useApp();
   const [clientKeys, setClientKeys] = useState([]);
+  const [models, setModels] = useState([]);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -15,8 +16,9 @@ export default function ClientKeysPage() {
   const load = async () => {
     setLoading(true);
     try {
-      const response = await fetchClientKeys();
-      setClientKeys(response.items || []);
+      const [clientKeysResponse, modelsResponse] = await Promise.all([fetchClientKeys(), fetchModels()]);
+      setClientKeys(clientKeysResponse.items || []);
+      setModels((modelsResponse.items || []).filter((item) => item.is_enabled));
     } catch (error) {
       message.error(error.response?.data?.error?.message || error.message || "Failed to load client keys");
     } finally {
@@ -36,6 +38,10 @@ export default function ClientKeysPage() {
       rpm_limit: 0,
       daily_request_limit: 0,
       daily_token_limit: 0,
+      daily_cost_limit: 0,
+      monthly_cost_limit: 0,
+      warning_threshold: 80,
+      allowed_model_ids: [],
     });
     setOpen(true);
   };
@@ -49,6 +55,10 @@ export default function ClientKeysPage() {
       rpm_limit: record.rpm_limit,
       daily_request_limit: record.daily_request_limit,
       daily_token_limit: record.daily_token_limit,
+      daily_cost_limit: record.daily_cost_limit,
+      monthly_cost_limit: record.monthly_cost_limit,
+      warning_threshold: record.warning_threshold,
+      allowed_model_ids: record.allowed_model_ids || [],
     });
     setOpen(true);
   };
@@ -99,12 +109,24 @@ export default function ClientKeysPage() {
         rpm_limit: record.rpm_limit,
         daily_request_limit: record.daily_request_limit,
         daily_token_limit: record.daily_token_limit,
+        daily_cost_limit: record.daily_cost_limit,
+        monthly_cost_limit: record.monthly_cost_limit,
+        warning_threshold: record.warning_threshold,
+        allowed_model_ids: record.allowed_model_ids || [],
       });
       message.success("Client key status updated");
       await load();
     } catch (error) {
       message.error(error.response?.data?.error?.message || error.message || "Status update failed");
     }
+  };
+
+  const renderUsageTag = (label, value, limited) => {
+    if (value === null || value === undefined) {
+      return "-";
+    }
+    const color = limited ? "red" : value >= 80 ? "gold" : "blue";
+    return <Tag color={color}>{label} {Number(value).toFixed(1)}%</Tag>;
   };
 
   return (
@@ -144,6 +166,79 @@ export default function ClientKeysPage() {
             { title: "RPM", dataIndex: "rpm_limit", key: "rpm_limit" },
             { title: "Daily Requests", dataIndex: "daily_request_limit", key: "daily_request_limit" },
             { title: "Daily Tokens", dataIndex: "daily_token_limit", key: "daily_token_limit" },
+            {
+              title: "Daily Budget",
+              dataIndex: "daily_cost_limit",
+              key: "daily_cost_limit",
+              render: (value) => (value ? `$${Number(value).toFixed(4)}` : "-"),
+            },
+            {
+              title: "Monthly Budget",
+              dataIndex: "monthly_cost_limit",
+              key: "monthly_cost_limit",
+              render: (value) => (value ? `$${Number(value).toFixed(4)}` : "-"),
+            },
+            {
+              title: "Allowed Models",
+              key: "allowed_models",
+              render: (_, record) =>
+                record.allowed_models?.length ? (
+                  <Space wrap>
+                    {record.allowed_models.map((item) => (
+                      <Tag key={item}>{item}</Tag>
+                    ))}
+                  </Space>
+                ) : (
+                  <Typography.Text type="secondary">All models</Typography.Text>
+                ),
+            },
+            {
+              title: "Current RPM",
+              key: "current_rpm",
+              render: (_, record) => record.usage?.current_rpm ?? 0,
+            },
+            {
+              title: "Daily Requests Used",
+              key: "daily_requests_used",
+              render: (_, record) => record.usage?.daily_requests_used ?? 0,
+            },
+            {
+              title: "Daily Tokens Used",
+              key: "daily_tokens_used",
+              render: (_, record) => record.usage?.daily_tokens_used ?? 0,
+            },
+            {
+              title: "Daily Cost Used",
+              key: "daily_cost_used",
+              render: (_, record) => `$${Number(record.cost_usage?.daily_cost_used || 0).toFixed(4)}`,
+            },
+            {
+              title: "Monthly Cost Used",
+              key: "monthly_cost_used",
+              render: (_, record) => `$${Number(record.cost_usage?.monthly_cost_used || 0).toFixed(4)}`,
+            },
+            {
+              title: "Quota Health",
+              key: "quota_health",
+              render: (_, record) => (
+                <Space wrap>
+                  {renderUsageTag("RPM", record.usage?.rpm_usage_percent, record.usage?.is_rpm_limited)}
+                  {renderUsageTag("Req", record.usage?.daily_request_usage_percent, record.usage?.is_daily_request_limited)}
+                  {renderUsageTag("Token", record.usage?.daily_token_usage_percent, record.usage?.is_daily_token_limited)}
+                </Space>
+              ),
+            },
+            {
+              title: "Budget Health",
+              key: "budget_health",
+              render: (_, record) => (
+                <Space wrap>
+                  {renderUsageTag("Day", record.cost_usage?.daily_cost_usage_percent, record.cost_usage?.is_daily_cost_limited)}
+                  {renderUsageTag("Month", record.cost_usage?.monthly_cost_usage_percent, record.cost_usage?.is_monthly_cost_limited)}
+                  {record.cost_usage?.is_warning_triggered ? <Tag color="gold">Warn</Tag> : null}
+                </Space>
+              ),
+            },
             {
               title: "Expires At",
               dataIndex: "expires_at",
@@ -194,6 +289,25 @@ export default function ClientKeysPage() {
           </Form.Item>
           <Form.Item label="Daily Token Limit" name="daily_token_limit" extra="0 means unlimited">
             <InputNumber min={0} style={{ width: "100%" }} />
+          </Form.Item>
+          <Form.Item label="Daily Cost Limit" name="daily_cost_limit" extra="USD, 0 means unlimited">
+            <InputNumber min={0} step={0.0001} style={{ width: "100%" }} />
+          </Form.Item>
+          <Form.Item label="Monthly Cost Limit" name="monthly_cost_limit" extra="USD, 0 means unlimited">
+            <InputNumber min={0} step={0.0001} style={{ width: "100%" }} />
+          </Form.Item>
+          <Form.Item label="Warning Threshold" name="warning_threshold" extra="Percent, default 80">
+            <InputNumber min={0} max={100} step={1} style={{ width: "100%" }} />
+          </Form.Item>
+          <Form.Item label="Allowed Models" name="allowed_model_ids" extra="Leave empty to allow all enabled models.">
+            <Select
+              mode="multiple"
+              allowClear
+              options={models.map((item) => ({
+                label: `${item.public_name} (${item.provider_name})`,
+                value: item.id,
+              }))}
+            />
           </Form.Item>
           <Form.Item label="Description" name="description">
             <Input.TextArea rows={4} />

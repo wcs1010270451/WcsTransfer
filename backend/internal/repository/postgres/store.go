@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -151,9 +152,36 @@ RETURNING id, name, slug, provider_type, base_url, status, description, extra_co
 
 func (s *Store) ListClientAPIKeys(ctx context.Context) ([]entity.ClientAPIKey, error) {
 	const query = `
-SELECT id, name, masked_key, status, description, rpm_limit, daily_request_limit, daily_token_limit, expires_at, last_used_at, last_error_at, last_error_message, created_at, updated_at
-FROM client_api_keys
-ORDER BY id DESC`
+SELECT cak.id, cak.name, cak.masked_key, cak.status, cak.description,
+       cak.rpm_limit, cak.daily_request_limit, cak.daily_token_limit,
+       cak.daily_cost_limit::float8, cak.monthly_cost_limit::float8, cak.warning_threshold::float8,
+       COALESCE(model_access.allowed_model_ids, ARRAY[]::bigint[]),
+       COALESCE(model_access.allowed_models, ARRAY[]::text[]),
+       COALESCE(daily_usage.daily_cost_used, 0)::float8,
+       COALESCE(monthly_usage.monthly_cost_used, 0)::float8,
+       cak.expires_at, cak.last_used_at, cak.last_error_at, cak.last_error_message, cak.created_at, cak.updated_at
+FROM client_api_keys cak
+LEFT JOIN LATERAL (
+    SELECT
+        array_agg(cam.model_id ORDER BY cam.model_id) AS allowed_model_ids,
+        array_agg(m.public_name ORDER BY m.public_name) AS allowed_models
+    FROM client_api_key_models cam
+    JOIN models m ON m.id = cam.model_id
+    WHERE cam.client_api_key_id = cak.id
+) model_access ON TRUE
+LEFT JOIN LATERAL (
+    SELECT COALESCE(SUM(estimated_cost), 0) AS daily_cost_used
+    FROM request_logs
+    WHERE client_api_key_id = cak.id
+      AND created_at >= date_trunc('day', NOW())
+) daily_usage ON TRUE
+LEFT JOIN LATERAL (
+    SELECT COALESCE(SUM(estimated_cost), 0) AS monthly_cost_used
+    FROM request_logs
+    WHERE client_api_key_id = cak.id
+      AND created_at >= date_trunc('month', NOW())
+) monthly_usage ON TRUE
+ORDER BY cak.id DESC`
 
 	rows, err := s.pool.Query(ctx, query)
 	if err != nil {
@@ -184,12 +212,21 @@ func (s *Store) CreateClientAPIKey(ctx context.Context, input entity.CreateClien
 	}
 
 	const query = `
-INSERT INTO client_api_keys (name, key_hash, masked_key, status, description, rpm_limit, daily_request_limit, daily_token_limit, expires_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-RETURNING id, name, masked_key, status, description, rpm_limit, daily_request_limit, daily_token_limit, expires_at, last_used_at, last_error_at, last_error_message, created_at, updated_at`
+INSERT INTO client_api_keys (
+    name, key_hash, masked_key, status, description, rpm_limit, daily_request_limit, daily_token_limit,
+    daily_cost_limit, monthly_cost_limit, warning_threshold, expires_at
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+RETURNING id`
 
-	var item entity.ClientAPIKey
-	err = s.pool.QueryRow(
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return entity.ClientAPIKey{}, fmt.Errorf("begin create client api key tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var clientKeyID int64
+	err = tx.QueryRow(
 		ctx,
 		query,
 		input.Name,
@@ -200,24 +237,27 @@ RETURNING id, name, masked_key, status, description, rpm_limit, daily_request_li
 		input.RPMLimit,
 		input.DailyRequestLimit,
 		input.DailyTokenLimit,
+		input.DailyCostLimit,
+		input.MonthlyCostLimit,
+		input.WarningThreshold,
 		input.ExpiresAt,
-	).Scan(
-		&item.ID,
-		&item.Name,
-		&item.MaskedKey,
-		&item.Status,
-		&item.Description,
-		&item.ExpiresAt,
-		&item.LastUsedAt,
-		&item.LastErrorAt,
-		&item.LastErrorMessage,
-		&item.CreatedAt,
-		&item.UpdatedAt,
-	)
+	).Scan(&clientKeyID)
 	if err != nil {
 		return entity.ClientAPIKey{}, fmt.Errorf("insert client api key: %w", err)
 	}
 
+	if err := syncClientAPIKeyModels(ctx, tx, clientKeyID, input.AllowedModelIDs); err != nil {
+		return entity.ClientAPIKey{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return entity.ClientAPIKey{}, fmt.Errorf("commit create client api key tx: %w", err)
+	}
+
+	item, err := s.getClientAPIKeyByID(ctx, clientKeyID)
+	if err != nil {
+		return entity.ClientAPIKey{}, err
+	}
 	item.PlainAPIKey = plainKey
 	return item, nil
 }
@@ -231,12 +271,21 @@ SET name = $2,
     rpm_limit = $5,
     daily_request_limit = $6,
     daily_token_limit = $7,
-    expires_at = $8
+    daily_cost_limit = $8,
+    monthly_cost_limit = $9,
+    warning_threshold = $10,
+    expires_at = $11
 WHERE id = $1
-RETURNING id, name, masked_key, status, description, rpm_limit, daily_request_limit, daily_token_limit, expires_at, last_used_at, last_error_at, last_error_message, created_at, updated_at`
+RETURNING id`
 
-	var item entity.ClientAPIKey
-	err := s.pool.QueryRow(
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return entity.ClientAPIKey{}, fmt.Errorf("begin update client api key tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var clientKeyID int64
+	err = tx.QueryRow(
 		ctx,
 		query,
 		input.ID,
@@ -246,25 +295,23 @@ RETURNING id, name, masked_key, status, description, rpm_limit, daily_request_li
 		input.RPMLimit,
 		input.DailyRequestLimit,
 		input.DailyTokenLimit,
+		input.DailyCostLimit,
+		input.MonthlyCostLimit,
+		input.WarningThreshold,
 		input.ExpiresAt,
-	).Scan(
-		&item.ID,
-		&item.Name,
-		&item.MaskedKey,
-		&item.Status,
-		&item.Description,
-		&item.ExpiresAt,
-		&item.LastUsedAt,
-		&item.LastErrorAt,
-		&item.LastErrorMessage,
-		&item.CreatedAt,
-		&item.UpdatedAt,
-	)
+	).Scan(&clientKeyID)
 	if err != nil {
 		return entity.ClientAPIKey{}, fmt.Errorf("update client api key: %w", err)
 	}
 
-	return item, nil
+	if err := syncClientAPIKeyModels(ctx, tx, clientKeyID, input.AllowedModelIDs); err != nil {
+		return entity.ClientAPIKey{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return entity.ClientAPIKey{}, fmt.Errorf("commit update client api key tx: %w", err)
+	}
+
+	return s.getClientAPIKeyByID(ctx, clientKeyID)
 }
 
 func (s *Store) ListProviderKeys(ctx context.Context) ([]entity.ProviderKey, error) {
@@ -429,7 +476,9 @@ RETURNING id, provider_id, name, api_key, status, weight, priority, rpm_limit, t
 func (s *Store) ListModels(ctx context.Context) ([]entity.Model, error) {
 	const query = `
 SELECT m.id, m.public_name, m.provider_id, p.name, m.upstream_model, m.route_strategy, m.is_enabled,
-       m.max_tokens, m.temperature::float8, m.timeout_seconds, m.metadata, m.created_at, m.updated_at
+       m.max_tokens, m.temperature::float8, m.timeout_seconds,
+       m.input_cost_per_1m::float8, m.output_cost_per_1m::float8,
+       m.metadata, m.created_at, m.updated_at
 FROM models m
 JOIN providers p ON p.id = m.provider_id
 ORDER BY m.id DESC`
@@ -455,6 +504,8 @@ ORDER BY m.id DESC`
 			&item.MaxTokens,
 			&item.Temperature,
 			&item.TimeoutSeconds,
+			&item.InputCostPer1M,
+			&item.OutputCostPer1M,
 			&rawMetadata,
 			&item.CreatedAt,
 			&item.UpdatedAt,
@@ -474,10 +525,14 @@ ORDER BY m.id DESC`
 
 func (s *Store) CreateModel(ctx context.Context, input entity.CreateModelInput) (entity.Model, error) {
 	const query = `
-INSERT INTO models (public_name, provider_id, upstream_model, route_strategy, is_enabled, max_tokens, temperature, timeout_seconds, metadata)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+INSERT INTO models (
+    public_name, provider_id, upstream_model, route_strategy, is_enabled, max_tokens,
+    temperature, timeout_seconds, input_cost_per_1m, output_cost_per_1m, metadata
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 RETURNING id, public_name, provider_id, upstream_model, route_strategy, is_enabled, max_tokens,
-          temperature::float8, timeout_seconds, metadata, created_at, updated_at`
+          temperature::float8, timeout_seconds, input_cost_per_1m::float8, output_cost_per_1m::float8,
+          metadata, created_at, updated_at`
 
 	var item entity.Model
 	var rawMetadata []byte
@@ -492,6 +547,8 @@ RETURNING id, public_name, provider_id, upstream_model, route_strategy, is_enabl
 		input.MaxTokens,
 		input.Temperature,
 		input.TimeoutSeconds,
+		input.InputCostPer1M,
+		input.OutputCostPer1M,
 		normalizeJSON(input.Metadata),
 	).Scan(
 		&item.ID,
@@ -503,6 +560,8 @@ RETURNING id, public_name, provider_id, upstream_model, route_strategy, is_enabl
 		&item.MaxTokens,
 		&item.Temperature,
 		&item.TimeoutSeconds,
+		&item.InputCostPer1M,
+		&item.OutputCostPer1M,
 		&rawMetadata,
 		&item.CreatedAt,
 		&item.UpdatedAt,
@@ -532,10 +591,13 @@ SET public_name = $2,
     max_tokens = $7,
     temperature = $8,
     timeout_seconds = $9,
-    metadata = $10
+    input_cost_per_1m = $10,
+    output_cost_per_1m = $11,
+    metadata = $12
 WHERE id = $1
 RETURNING id, public_name, provider_id, upstream_model, route_strategy, is_enabled, max_tokens,
-          temperature::float8, timeout_seconds, metadata, created_at, updated_at`
+          temperature::float8, timeout_seconds, input_cost_per_1m::float8, output_cost_per_1m::float8,
+          metadata, created_at, updated_at`
 
 	var item entity.Model
 	var rawMetadata []byte
@@ -551,6 +613,8 @@ RETURNING id, public_name, provider_id, upstream_model, route_strategy, is_enabl
 		input.MaxTokens,
 		input.Temperature,
 		input.TimeoutSeconds,
+		input.InputCostPer1M,
+		input.OutputCostPer1M,
 		normalizeJSON(input.Metadata),
 	).Scan(
 		&item.ID,
@@ -562,6 +626,8 @@ RETURNING id, public_name, provider_id, upstream_model, route_strategy, is_enabl
 		&item.MaxTokens,
 		&item.Temperature,
 		&item.TimeoutSeconds,
+		&item.InputCostPer1M,
+		&item.OutputCostPer1M,
 		&rawMetadata,
 		&item.CreatedAt,
 		&item.UpdatedAt,
@@ -583,7 +649,9 @@ RETURNING id, public_name, provider_id, upstream_model, route_strategy, is_enabl
 func (s *Store) ListEnabledModels(ctx context.Context) ([]entity.Model, error) {
 	const query = `
 SELECT m.id, m.public_name, m.provider_id, p.name, m.upstream_model, m.route_strategy, m.is_enabled,
-       m.max_tokens, m.temperature::float8, m.timeout_seconds, m.metadata, m.created_at, m.updated_at
+       m.max_tokens, m.temperature::float8, m.timeout_seconds,
+       m.input_cost_per_1m::float8, m.output_cost_per_1m::float8,
+       m.metadata, m.created_at, m.updated_at
 FROM models m
 JOIN providers p ON p.id = m.provider_id
 WHERE m.is_enabled = TRUE
@@ -610,6 +678,8 @@ ORDER BY m.public_name ASC`
 			&item.MaxTokens,
 			&item.Temperature,
 			&item.TimeoutSeconds,
+			&item.InputCostPer1M,
+			&item.OutputCostPer1M,
 			&rawMetadata,
 			&item.CreatedAt,
 			&item.UpdatedAt,
@@ -631,7 +701,8 @@ func (s *Store) ResolveModelRoute(ctx context.Context, publicName string) (entit
 	const modelQuery = `
 SELECT
 	m.id, m.public_name, m.provider_id, m.upstream_model, m.route_strategy, m.is_enabled,
-	m.max_tokens, m.temperature::float8, m.timeout_seconds, m.metadata, m.created_at, m.updated_at,
+	m.max_tokens, m.temperature::float8, m.timeout_seconds, m.input_cost_per_1m::float8, m.output_cost_per_1m::float8,
+    m.metadata, m.created_at, m.updated_at,
 	p.id, p.name, p.slug, p.provider_type, p.base_url, p.status, p.description, p.extra_config, p.created_at, p.updated_at
 FROM models m
 JOIN providers p ON p.id = m.provider_id
@@ -653,6 +724,8 @@ LIMIT 1`
 		&route.Model.MaxTokens,
 		&route.Model.Temperature,
 		&route.Model.TimeoutSeconds,
+		&route.Model.InputCostPer1M,
+		&route.Model.OutputCostPer1M,
 		&modelMetadata,
 		&route.Model.CreatedAt,
 		&route.Model.UpdatedAt,
@@ -690,12 +763,45 @@ LIMIT 1`
 
 func (s *Store) AuthenticateClientAPIKey(ctx context.Context, rawKey string) (entity.ClientAPIKey, error) {
 	const query = `
-UPDATE client_api_keys
-SET last_used_at = NOW()
-WHERE key_hash = $1
-  AND status = 'active'
-  AND (expires_at IS NULL OR expires_at > NOW())
-RETURNING id, name, masked_key, status, description, rpm_limit, daily_request_limit, daily_token_limit, expires_at, last_used_at, last_error_at, last_error_message, created_at, updated_at`
+WITH updated_key AS (
+    UPDATE client_api_keys
+    SET last_used_at = NOW()
+    WHERE key_hash = $1
+      AND status = 'active'
+      AND (expires_at IS NULL OR expires_at > NOW())
+    RETURNING id, name, masked_key, status, description, rpm_limit, daily_request_limit, daily_token_limit,
+              daily_cost_limit, monthly_cost_limit, warning_threshold,
+              expires_at, last_used_at, last_error_at, last_error_message, created_at, updated_at
+)
+SELECT uk.id, uk.name, uk.masked_key, uk.status, uk.description,
+       uk.rpm_limit, uk.daily_request_limit, uk.daily_token_limit,
+       uk.daily_cost_limit::float8, uk.monthly_cost_limit::float8, uk.warning_threshold::float8,
+       COALESCE(model_access.allowed_model_ids, ARRAY[]::bigint[]),
+       COALESCE(model_access.allowed_models, ARRAY[]::text[]),
+       COALESCE(daily_usage.daily_cost_used, 0)::float8,
+       COALESCE(monthly_usage.monthly_cost_used, 0)::float8,
+       uk.expires_at, uk.last_used_at, uk.last_error_at, uk.last_error_message, uk.created_at, uk.updated_at
+FROM updated_key uk
+LEFT JOIN LATERAL (
+    SELECT
+        array_agg(cam.model_id ORDER BY cam.model_id) AS allowed_model_ids,
+        array_agg(m.public_name ORDER BY m.public_name) AS allowed_models
+    FROM client_api_key_models cam
+    JOIN models m ON m.id = cam.model_id
+    WHERE cam.client_api_key_id = uk.id
+) model_access ON TRUE
+LEFT JOIN LATERAL (
+    SELECT COALESCE(SUM(estimated_cost), 0) AS daily_cost_used
+    FROM request_logs
+    WHERE client_api_key_id = uk.id
+      AND created_at >= date_trunc('day', NOW())
+) daily_usage ON TRUE
+LEFT JOIN LATERAL (
+    SELECT COALESCE(SUM(estimated_cost), 0) AS monthly_cost_used
+    FROM request_logs
+    WHERE client_api_key_id = uk.id
+      AND created_at >= date_trunc('month', NOW())
+) monthly_usage ON TRUE`
 
 	var item entity.ClientAPIKey
 	err := s.pool.QueryRow(ctx, query, hashClientAPIKey(rawKey)).Scan(
@@ -707,6 +813,8 @@ RETURNING id, name, masked_key, status, description, rpm_limit, daily_request_li
 		&item.RPMLimit,
 		&item.DailyRequestLimit,
 		&item.DailyTokenLimit,
+		&item.AllowedModelIDs,
+		&item.AllowedModels,
 		&item.ExpiresAt,
 		&item.LastUsedAt,
 		&item.LastErrorAt,
@@ -895,6 +1003,8 @@ WITH resource_counts AS (
         (SELECT COUNT(*) FROM providers) AS provider_count,
         (SELECT COUNT(*) FROM provider_keys) AS key_count,
         (SELECT COUNT(*) FROM provider_keys WHERE status = 'active') AS active_key_count,
+        (SELECT COUNT(*) FROM client_api_keys) AS client_key_count,
+        (SELECT COUNT(*) FROM client_api_keys WHERE status = 'active') AS active_client_key_count,
         (SELECT COUNT(*) FROM models) AS model_count,
         (SELECT COUNT(*) FROM models WHERE is_enabled = TRUE) AS enabled_model_count
 ),
@@ -915,6 +1025,8 @@ SELECT
     rc.provider_count,
     rc.key_count,
     rc.active_key_count,
+    rc.client_key_count,
+    rc.active_client_key_count,
     rc.model_count,
     rc.enabled_model_count,
     rs.request_count,
@@ -929,14 +1041,19 @@ FROM resource_counts rc
 CROSS JOIN request_stats rs`
 
 	stats := entity.DashboardStats{
-		WindowHours:  windowHours,
-		TopModels:    make([]entity.ModelUsageStat, 0),
-		TopProviders: make([]entity.ProviderUsageStat, 0),
+		WindowHours:   windowHours,
+		TopModels:     make([]entity.ModelUsageStat, 0),
+		TopProviders:  make([]entity.ProviderUsageStat, 0),
+		TopClients:    make([]entity.ClientUsageStat, 0),
+		QuotaPressure: make([]entity.ClientQuotaPressure, 0),
+		BudgetPressure: make([]entity.ClientBudgetPressure, 0),
 	}
 	err := s.pool.QueryRow(ctx, summaryQuery, windowHours).Scan(
 		&stats.ProviderCount,
 		&stats.KeyCount,
 		&stats.ActiveKeyCount,
+		&stats.ClientKeyCount,
+		&stats.ActiveClientKeyCount,
 		&stats.ModelCount,
 		&stats.EnabledModelCount,
 		&stats.RequestCount,
@@ -1035,6 +1152,50 @@ LIMIT 5`
 		return entity.DashboardStats{}, fmt.Errorf("iterate dashboard top providers: %w", err)
 	}
 
+const topClientsQuery = `
+SELECT
+    COALESCE(cak.id, 0) AS client_api_key_id,
+    COALESCE(cak.name, 'Anonymous Client') AS client_api_key_name,
+    COUNT(*)::bigint AS request_count,
+    COUNT(*) FILTER (WHERE rl.success)::bigint AS success_count,
+    COUNT(*) FILTER (WHERE NOT rl.success)::bigint AS failed_count,
+    COALESCE(AVG(rl.latency_ms), 0)::float8 AS average_latency_ms,
+    COALESCE(SUM(rl.total_tokens), 0)::bigint AS total_tokens,
+    COALESCE(SUM(rl.estimated_cost), 0)::float8 AS estimated_cost
+FROM request_logs rl
+LEFT JOIN client_api_keys cak ON cak.id = rl.client_api_key_id
+WHERE rl.created_at >= NOW() - make_interval(hours => $1)
+GROUP BY COALESCE(cak.id, 0), COALESCE(cak.name, 'Anonymous Client')
+ORDER BY estimated_cost DESC, request_count DESC, client_api_key_name ASC
+LIMIT 5`
+
+	clientRows, err := s.pool.Query(ctx, topClientsQuery, windowHours)
+	if err != nil {
+		return entity.DashboardStats{}, fmt.Errorf("query dashboard top clients: %w", err)
+	}
+	defer clientRows.Close()
+
+	for clientRows.Next() {
+		var item entity.ClientUsageStat
+		if err := clientRows.Scan(
+			&item.ClientAPIKeyID,
+			&item.ClientAPIKeyName,
+			&item.RequestCount,
+			&item.SuccessCount,
+			&item.FailedCount,
+			&item.AverageLatencyMS,
+			&item.TotalTokens,
+			&item.EstimatedCost,
+		); err != nil {
+			return entity.DashboardStats{}, fmt.Errorf("scan dashboard top client: %w", err)
+		}
+		item.SuccessRate = calculateSuccessRate(item.SuccessCount, item.RequestCount)
+		stats.TopClients = append(stats.TopClients, item)
+	}
+	if err := clientRows.Err(); err != nil {
+		return entity.DashboardStats{}, fmt.Errorf("iterate dashboard top clients: %w", err)
+	}
+
 	return stats, nil
 }
 
@@ -1125,6 +1286,8 @@ func scanClientAPIKey(scanner interface {
 	Scan(dest ...any) error
 }) (entity.ClientAPIKey, error) {
 	var item entity.ClientAPIKey
+	var dailyCostUsed float64
+	var monthlyCostUsed float64
 	if err := scanner.Scan(
 		&item.ID,
 		&item.Name,
@@ -1134,6 +1297,13 @@ func scanClientAPIKey(scanner interface {
 		&item.RPMLimit,
 		&item.DailyRequestLimit,
 		&item.DailyTokenLimit,
+		&item.DailyCostLimit,
+		&item.MonthlyCostLimit,
+		&item.WarningThreshold,
+		&item.AllowedModelIDs,
+		&item.AllowedModels,
+		&dailyCostUsed,
+		&monthlyCostUsed,
 		&item.ExpiresAt,
 		&item.LastUsedAt,
 		&item.LastErrorAt,
@@ -1144,7 +1314,138 @@ func scanClientAPIKey(scanner interface {
 		return entity.ClientAPIKey{}, fmt.Errorf("scan client api key: %w", err)
 	}
 
+	item.CostUsage = buildClientCostUsage(item, dailyCostUsed, monthlyCostUsed)
 	return item, nil
+}
+
+func (s *Store) getClientAPIKeyByID(ctx context.Context, id int64) (entity.ClientAPIKey, error) {
+	const query = `
+SELECT cak.id, cak.name, cak.masked_key, cak.status, cak.description,
+       cak.rpm_limit, cak.daily_request_limit, cak.daily_token_limit,
+       cak.daily_cost_limit::float8, cak.monthly_cost_limit::float8, cak.warning_threshold::float8,
+       COALESCE(model_access.allowed_model_ids, ARRAY[]::bigint[]),
+       COALESCE(model_access.allowed_models, ARRAY[]::text[]),
+       COALESCE(daily_usage.daily_cost_used, 0)::float8,
+       COALESCE(monthly_usage.monthly_cost_used, 0)::float8,
+       cak.expires_at, cak.last_used_at, cak.last_error_at, cak.last_error_message, cak.created_at, cak.updated_at
+FROM client_api_keys cak
+LEFT JOIN LATERAL (
+    SELECT
+        array_agg(cam.model_id ORDER BY cam.model_id) AS allowed_model_ids,
+        array_agg(m.public_name ORDER BY m.public_name) AS allowed_models
+    FROM client_api_key_models cam
+    JOIN models m ON m.id = cam.model_id
+    WHERE cam.client_api_key_id = cak.id
+) model_access ON TRUE
+LEFT JOIN LATERAL (
+    SELECT COALESCE(SUM(estimated_cost), 0) AS daily_cost_used
+    FROM request_logs
+    WHERE client_api_key_id = cak.id
+      AND created_at >= date_trunc('day', NOW())
+) daily_usage ON TRUE
+LEFT JOIN LATERAL (
+    SELECT COALESCE(SUM(estimated_cost), 0) AS monthly_cost_used
+    FROM request_logs
+WHERE client_api_key_id = cak.id
+      AND created_at >= date_trunc('month', NOW())
+) monthly_usage ON TRUE
+WHERE cak.id = $1`
+
+	return scanClientAPIKey(s.pool.QueryRow(ctx, query, id))
+}
+
+func syncClientAPIKeyModels(ctx context.Context, tx pgx.Tx, clientKeyID int64, modelIDs []int64) error {
+	if _, err := tx.Exec(ctx, `DELETE FROM client_api_key_models WHERE client_api_key_id = $1`, clientKeyID); err != nil {
+		return fmt.Errorf("clear client api key models: %w", err)
+	}
+
+	normalized := normalizeInt64IDs(modelIDs)
+	for _, modelID := range normalized {
+		if _, err := tx.Exec(
+			ctx,
+			`INSERT INTO client_api_key_models (client_api_key_id, model_id) VALUES ($1, $2)`,
+			clientKeyID,
+			modelID,
+		); err != nil {
+			return fmt.Errorf("insert client api key model: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func normalizeInt64IDs(values []int64) []int64 {
+	if len(values) == 0 {
+		return nil
+	}
+
+	seen := make(map[int64]struct{}, len(values))
+	items := make([]int64, 0, len(values))
+	for _, value := range values {
+		if value <= 0 {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		items = append(items, value)
+	}
+
+	return items
+}
+
+func buildClientCostUsage(item entity.ClientAPIKey, dailyCostUsed float64, monthlyCostUsed float64) *entity.ClientCostUsage {
+	now := time.Now().UTC()
+	dailyResetAt := nextDayUTC(now)
+	monthlyResetAt := time.Date(now.Year(), now.Month()+1, 1, 0, 0, 0, 0, time.UTC)
+
+	usage := &entity.ClientCostUsage{
+		DailyCostUsed:   dailyCostUsed,
+		MonthlyCostUsed: monthlyCostUsed,
+		DailyResetAt:    &dailyResetAt,
+		MonthlyResetAt:  &monthlyResetAt,
+	}
+
+	if item.DailyCostLimit > 0 {
+		usage.DailyCostRemaining = costRemaining(item.DailyCostLimit, dailyCostUsed)
+		usage.DailyCostUsagePercent = costUsagePercent(item.DailyCostLimit, dailyCostUsed)
+		usage.IsDailyCostLimited = dailyCostUsed >= item.DailyCostLimit
+	}
+	if item.MonthlyCostLimit > 0 {
+		usage.MonthlyCostRemaining = costRemaining(item.MonthlyCostLimit, monthlyCostUsed)
+		usage.MonthlyCostUsagePercent = costUsagePercent(item.MonthlyCostLimit, monthlyCostUsed)
+		usage.IsMonthlyCostLimited = monthlyCostUsed >= item.MonthlyCostLimit
+	}
+
+	highestUsagePercent := usage.DailyCostUsagePercent
+	if usage.MonthlyCostUsagePercent > highestUsagePercent {
+		highestUsagePercent = usage.MonthlyCostUsagePercent
+	}
+	if item.WarningThreshold > 0 && highestUsagePercent >= item.WarningThreshold {
+		usage.IsWarningTriggered = true
+	}
+
+	return usage
+}
+
+func nextDayUTC(now time.Time) time.Time {
+	return time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, time.UTC)
+}
+
+func costRemaining(limit float64, used float64) float64 {
+	remaining := limit - used
+	if remaining < 0 {
+		return 0
+	}
+	return remaining
+}
+
+func costUsagePercent(limit float64, used float64) float64 {
+	if limit <= 0 {
+		return 0
+	}
+	return used * 100 / limit
 }
 
 func (s *Store) listActiveProviderKeys(ctx context.Context, providerID int64) ([]entity.ProviderKey, error) {

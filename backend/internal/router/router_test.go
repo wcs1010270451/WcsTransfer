@@ -78,8 +78,13 @@ func (s *stubStore) CreateClientAPIKey(_ context.Context, input entity.CreateCli
 		RPMLimit:          input.RPMLimit,
 		DailyRequestLimit: input.DailyRequestLimit,
 		DailyTokenLimit:   input.DailyTokenLimit,
+		DailyCostLimit:    input.DailyCostLimit,
+		MonthlyCostLimit:  input.MonthlyCostLimit,
+		WarningThreshold:  input.WarningThreshold,
+		AllowedModelIDs:   input.AllowedModelIDs,
 		ExpiresAt:         input.ExpiresAt,
 	}
+	item.AllowedModels = s.allowedModelNames(input.AllowedModelIDs)
 	s.clientKeys = append(s.clientKeys, item)
 	return item, nil
 }
@@ -93,6 +98,11 @@ func (s *stubStore) UpdateClientAPIKey(_ context.Context, input entity.UpdateCli
 			item.RPMLimit = input.RPMLimit
 			item.DailyRequestLimit = input.DailyRequestLimit
 			item.DailyTokenLimit = input.DailyTokenLimit
+			item.DailyCostLimit = input.DailyCostLimit
+			item.MonthlyCostLimit = input.MonthlyCostLimit
+			item.WarningThreshold = input.WarningThreshold
+			item.AllowedModelIDs = input.AllowedModelIDs
+			item.AllowedModels = s.allowedModelNames(input.AllowedModelIDs)
 			item.ExpiresAt = input.ExpiresAt
 			s.clientKeys[index] = item
 			return item, nil
@@ -150,17 +160,19 @@ func (s *stubStore) ListModels(context.Context) ([]entity.Model, error) {
 
 func (s *stubStore) CreateModel(_ context.Context, input entity.CreateModelInput) (entity.Model, error) {
 	item := entity.Model{
-		ID:             int64(len(s.models) + 1),
-		PublicName:     input.PublicName,
-		ProviderID:     input.ProviderID,
-		ProviderName:   "stub-provider",
-		UpstreamModel:  input.UpstreamModel,
-		RouteStrategy:  input.RouteStrategy,
-		IsEnabled:      input.IsEnabled,
-		MaxTokens:      input.MaxTokens,
-		Temperature:    input.Temperature,
-		TimeoutSeconds: input.TimeoutSeconds,
-		Metadata:       input.Metadata,
+		ID:              int64(len(s.models) + 1),
+		PublicName:      input.PublicName,
+		ProviderID:      input.ProviderID,
+		ProviderName:    "stub-provider",
+		UpstreamModel:   input.UpstreamModel,
+		RouteStrategy:   input.RouteStrategy,
+		IsEnabled:       input.IsEnabled,
+		MaxTokens:       input.MaxTokens,
+		Temperature:     input.Temperature,
+		TimeoutSeconds:  input.TimeoutSeconds,
+		InputCostPer1M:  input.InputCostPer1M,
+		OutputCostPer1M: input.OutputCostPer1M,
+		Metadata:        input.Metadata,
 	}
 	s.models = append(s.models, item)
 	return item, nil
@@ -178,6 +190,8 @@ func (s *stubStore) UpdateModel(_ context.Context, input entity.UpdateModelInput
 			item.MaxTokens = input.MaxTokens
 			item.Temperature = input.Temperature
 			item.TimeoutSeconds = input.TimeoutSeconds
+			item.InputCostPer1M = input.InputCostPer1M
+			item.OutputCostPer1M = input.OutputCostPer1M
 			item.Metadata = input.Metadata
 			s.models[index] = item
 			return item, nil
@@ -230,6 +244,9 @@ func (s *stubStore) AuthenticateClientAPIKey(_ context.Context, rawKey string) (
 	trimmed := strings.TrimSpace(rawKey)
 	for _, item := range s.clientKeys {
 		if item.PlainAPIKey == trimmed && item.Status == "active" {
+			if len(item.AllowedModels) == 0 && len(item.AllowedModelIDs) > 0 {
+				item.AllowedModels = s.allowedModelNames(item.AllowedModelIDs)
+			}
 			return item, nil
 		}
 	}
@@ -281,6 +298,23 @@ func (s *stubStore) ListRequestLogs(_ context.Context, input entity.ListRequestL
 		Page:     page,
 		PageSize: pageSize,
 	}, nil
+}
+
+func (s *stubStore) allowedModelNames(ids []int64) []string {
+	if len(ids) == 0 {
+		return nil
+	}
+
+	items := make([]string, 0, len(ids))
+	for _, id := range ids {
+		for _, model := range s.models {
+			if model.ID == id {
+				items = append(items, model.PublicName)
+				break
+			}
+		}
+	}
+	return items
 }
 
 func (s *stubStore) GetRequestLog(_ context.Context, id int64) (entity.RequestLogDetail, error) {
@@ -455,6 +489,163 @@ func TestPublicRoutesAllowClientAPIKeyWhenProvided(t *testing.T) {
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
+	}
+}
+
+func TestPublicModelsFilteredByClientAuthorization(t *testing.T) {
+	cfg := config.Config{
+		AppName:  "wcstransfer-gateway",
+		Env:      "test",
+		GinMode:  "test",
+		HTTPPort: "8080",
+	}
+
+	store := &stubStore{
+		models: []entity.Model{
+			{ID: 1, PublicName: "gpt-4o-mini", ProviderName: "stub-provider", IsEnabled: true},
+			{ID: 2, PublicName: "qwen-plus", ProviderName: "stub-provider", IsEnabled: true},
+		},
+		clientKeys: []entity.ClientAPIKey{
+			{ID: 9, Name: "restricted-client", PlainAPIKey: "wcs_live_restricted", Status: "active", AllowedModelIDs: []int64{2}},
+		},
+	}
+	engine := New(cfg, &platform.Dependencies{}, &Stores{
+		Admin:  store,
+		Auth:   store,
+		Public: store,
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	request.Header.Set("Authorization", "Bearer wcs_live_restricted")
+	engine.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
+	}
+
+	var payload struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if len(payload.Data) != 1 || payload.Data[0].ID != "qwen-plus" {
+		t.Fatalf("expected only qwen-plus in model list, got %#v", payload.Data)
+	}
+}
+
+func TestChatCompletionsRejectsUnauthorizedModel(t *testing.T) {
+	cfg := config.Config{
+		AppName:  "wcstransfer-gateway",
+		Env:      "test",
+		GinMode:  "test",
+		HTTPPort: "8080",
+	}
+
+	store := &stubStore{
+		models: []entity.Model{
+			{ID: 1, PublicName: "gpt-4o-mini", ProviderName: "stub-provider", IsEnabled: true},
+			{ID: 2, PublicName: "qwen-plus", ProviderName: "stub-provider", IsEnabled: true},
+		},
+		clientKeys: []entity.ClientAPIKey{
+			{ID: 9, Name: "restricted-client", PlainAPIKey: "wcs_live_restricted", Status: "active", AllowedModelIDs: []int64{2}},
+		},
+	}
+	engine := New(cfg, &platform.Dependencies{}, &Stores{
+		Admin:  store,
+		Auth:   store,
+		Public: store,
+		Log:    store,
+	})
+
+	body, err := json.Marshal(map[string]any{
+		"model": "gpt-4o-mini",
+		"messages": []map[string]any{
+			{"role": "user", "content": "hello"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	request.Header.Set("Authorization", "Bearer wcs_live_restricted")
+	request.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("expected status %d, got %d", http.StatusForbidden, recorder.Code)
+	}
+	if len(store.createdLogs) != 1 {
+		t.Fatalf("expected one request log, got %d", len(store.createdLogs))
+	}
+	if store.createdLogs[0].ErrorType != "model_forbidden" {
+		t.Fatalf("expected model_forbidden log type, got %q", store.createdLogs[0].ErrorType)
+	}
+}
+
+func TestChatCompletionsRejectsExceededBudget(t *testing.T) {
+	cfg := config.Config{
+		AppName:  "wcstransfer-gateway",
+		Env:      "test",
+		GinMode:  "test",
+		HTTPPort: "8080",
+	}
+
+	store := &stubStore{
+		models: []entity.Model{
+			{ID: 1, PublicName: "gpt-4o-mini", ProviderName: "stub-provider", IsEnabled: true},
+		},
+		clientKeys: []entity.ClientAPIKey{
+			{
+				ID:             9,
+				Name:           "budgeted-client",
+				PlainAPIKey:    "wcs_live_budgeted",
+				Status:         "active",
+				DailyCostLimit: 1.5,
+				CostUsage: &entity.ClientCostUsage{
+					DailyCostUsed:      1.6,
+					DailyCostRemaining: 0,
+					IsDailyCostLimited: true,
+				},
+			},
+		},
+	}
+	engine := New(cfg, &platform.Dependencies{}, &Stores{
+		Admin:  store,
+		Auth:   store,
+		Public: store,
+		Log:    store,
+	})
+
+	body, err := json.Marshal(map[string]any{
+		"model": "gpt-4o-mini",
+		"messages": []map[string]any{
+			{"role": "user", "content": "hello"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	request.Header.Set("Authorization", "Bearer wcs_live_budgeted")
+	request.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected status %d, got %d", http.StatusTooManyRequests, recorder.Code)
+	}
+	if len(store.createdLogs) != 1 {
+		t.Fatalf("expected one request log, got %d", len(store.createdLogs))
+	}
+	if store.createdLogs[0].ErrorType != "budget_exceeded" {
+		t.Fatalf("expected budget_exceeded log type, got %q", store.createdLogs[0].ErrorType)
 	}
 }
 
@@ -817,6 +1008,174 @@ func TestChatCompletionsProxyRoute(t *testing.T) {
 	}
 	if store.createdLogs[0].ClientAPIKeyID != 7 {
 		t.Fatalf("expected client api key id to be logged, got %+v", store.createdLogs[0])
+	}
+}
+
+func TestChatCompletionsLogsEstimatedCost(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "chatcmpl-cost",
+			"choices": []map[string]any{
+				{"message": map[string]any{"role": "assistant", "content": "done"}},
+			},
+			"usage": map[string]any{
+				"prompt_tokens":     1000,
+				"completion_tokens": 2000,
+				"total_tokens":      3000,
+			},
+		})
+	}))
+	defer upstream.Close()
+
+	cfg := config.Config{AppName: "wcstransfer-gateway", Env: "test", GinMode: "test", HTTPPort: "8080"}
+	store := &stubStore{
+		clientKeys: []entity.ClientAPIKey{
+			{ID: 7, Name: "integration-client", PlainAPIKey: "wcs_live_proxy_test", Status: "active"},
+		},
+		models: []entity.Model{
+			{
+				ID:              1,
+				PublicName:      "gpt-4o-mini",
+				ProviderID:      1,
+				ProviderName:    "stub-provider",
+				UpstreamModel:   "gpt-4o-mini-upstream",
+				RouteStrategy:   "fixed",
+				IsEnabled:       true,
+				TimeoutSeconds:  30,
+				InputCostPer1M:  0.15,
+				OutputCostPer1M: 0.60,
+			},
+		},
+	}
+
+	routeStore := &stubStoreWithUpstream{
+		base:     store,
+		upstream: upstream.URL + "/v1",
+	}
+	engine := New(cfg, &platform.Dependencies{}, &Stores{
+		Admin:  routeStore,
+		Auth:   routeStore,
+		Log:    routeStore,
+		Public: routeStore,
+	})
+
+	body, err := json.Marshal(map[string]any{
+		"model": "gpt-4o-mini",
+		"messages": []map[string]any{
+			{"role": "user", "content": "hello"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	request.Header.Set("Authorization", "Bearer wcs_live_proxy_test")
+	request.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
+	}
+	if len(store.createdLogs) != 1 {
+		t.Fatalf("expected 1 created log, got %d", len(store.createdLogs))
+	}
+	if store.createdLogs[0].EstimatedCost <= 0 {
+		t.Fatalf("expected positive estimated cost, got %+v", store.createdLogs[0])
+	}
+}
+
+func TestEmbeddingsProxyRoute(t *testing.T) {
+	upstreamCalled := false
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalled = true
+		if r.URL.Path != "/v1/embeddings" {
+			t.Fatalf("unexpected upstream path: %s", r.URL.Path)
+		}
+
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode upstream body: %v", err)
+		}
+		if got := payload["model"]; got != "text-embedding-upstream" {
+			t.Fatalf("unexpected upstream model: %v", got)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"object": "list",
+			"data": []map[string]any{
+				{"object": "embedding", "index": 0, "embedding": []float64{0.1, 0.2, 0.3}},
+			},
+			"usage": map[string]any{
+				"prompt_tokens": 250,
+				"total_tokens":  250,
+			},
+		})
+	}))
+	defer upstream.Close()
+
+	cfg := config.Config{AppName: "wcstransfer-gateway", Env: "test", GinMode: "test", HTTPPort: "8080"}
+	store := &stubStore{
+		clientKeys: []entity.ClientAPIKey{
+			{ID: 7, Name: "integration-client", PlainAPIKey: "wcs_live_proxy_test", Status: "active"},
+		},
+		models: []entity.Model{
+			{
+				ID:              1,
+				PublicName:      "text-embedding-3-small",
+				ProviderID:      1,
+				ProviderName:    "stub-provider",
+				UpstreamModel:   "text-embedding-upstream",
+				RouteStrategy:   "fixed",
+				IsEnabled:       true,
+				TimeoutSeconds:  30,
+				InputCostPer1M:  0.02,
+				OutputCostPer1M: 0,
+			},
+		},
+	}
+	routeStore := &stubStoreWithUpstream{
+		base:     store,
+		upstream: upstream.URL + "/v1",
+	}
+	engine := New(cfg, &platform.Dependencies{}, &Stores{
+		Admin:  routeStore,
+		Auth:   routeStore,
+		Log:    routeStore,
+		Public: routeStore,
+	})
+
+	body, err := json.Marshal(map[string]any{
+		"model": "text-embedding-3-small",
+		"input": "hello embeddings",
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/embeddings", bytes.NewReader(body))
+	request.Header.Set("Authorization", "Bearer wcs_live_proxy_test")
+	request.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
+	}
+	if !upstreamCalled {
+		t.Fatalf("expected upstream server to be called")
+	}
+	if len(store.createdLogs) != 1 {
+		t.Fatalf("expected 1 created log, got %d", len(store.createdLogs))
+	}
+	if store.createdLogs[0].RequestType != "embeddings" {
+		t.Fatalf("unexpected log request type: %+v", store.createdLogs[0])
+	}
+	if store.createdLogs[0].TotalTokens != 250 {
+		t.Fatalf("expected total_tokens 250, got %+v", store.createdLogs[0])
 	}
 }
 

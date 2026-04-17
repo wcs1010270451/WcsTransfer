@@ -107,6 +107,68 @@ func (s *Service) AddTokenUsage(ctx context.Context, clientKey entity.ClientAPIK
 	return err
 }
 
+func (s *Service) GetUsage(ctx context.Context, clientKey entity.ClientAPIKey) (entity.ClientQuotaUsage, error) {
+	if s == nil || s.redis == nil || clientKey.ID <= 0 {
+		return entity.ClientQuotaUsage{}, nil
+	}
+
+	now := time.Now()
+	usage := entity.ClientQuotaUsage{}
+
+	if clientKey.RPMLimit > 0 {
+		resetAt := now.UTC().Truncate(time.Minute).Add(time.Minute)
+		value, err := s.readCounter(ctx, fmt.Sprintf("quota:client:%d:rpm:%s", clientKey.ID, now.UTC().Format("200601021504")))
+		if err != nil {
+			return entity.ClientQuotaUsage{}, err
+		}
+		usage.CurrentRPM = value
+		usage.RPMRemaining = limitRemaining(clientKey.RPMLimit, value)
+		usage.RPMUsagePercent = usagePercent(clientKey.RPMLimit, value)
+		usage.RPMResetAt = &resetAt
+		usage.IsRPMLimited = value >= int64(clientKey.RPMLimit)
+	}
+
+	if clientKey.DailyRequestLimit > 0 {
+		resetAt := tomorrowUTC(now)
+		value, err := s.readCounter(ctx, fmt.Sprintf("quota:client:%d:daily_requests:%s", clientKey.ID, now.UTC().Format("20060102")))
+		if err != nil {
+			return entity.ClientQuotaUsage{}, err
+		}
+		usage.DailyRequestsUsed = value
+		usage.DailyRequestsRemaining = limitRemaining(clientKey.DailyRequestLimit, value)
+		usage.DailyRequestUsagePercent = usagePercent(clientKey.DailyRequestLimit, value)
+		usage.DailyResetAt = &resetAt
+		usage.IsDailyRequestLimited = value >= int64(clientKey.DailyRequestLimit)
+	}
+
+	if clientKey.DailyTokenLimit > 0 {
+		resetAt := tomorrowUTC(now)
+		value, err := s.readCounter(ctx, fmt.Sprintf("quota:client:%d:daily_tokens:%s", clientKey.ID, now.UTC().Format("20060102")))
+		if err != nil {
+			return entity.ClientQuotaUsage{}, err
+		}
+		usage.DailyTokensUsed = value
+		usage.DailyTokensRemaining = limitRemaining(clientKey.DailyTokenLimit, value)
+		usage.DailyTokenUsagePercent = usagePercent(clientKey.DailyTokenLimit, value)
+		usage.DailyResetAt = &resetAt
+		usage.IsDailyTokenLimited = value >= int64(clientKey.DailyTokenLimit)
+	}
+
+	return usage, nil
+}
+
+func (s *Service) GetUsageBatch(ctx context.Context, clientKeys []entity.ClientAPIKey) (map[int64]entity.ClientQuotaUsage, error) {
+	items := make(map[int64]entity.ClientQuotaUsage, len(clientKeys))
+	for _, clientKey := range clientKeys {
+		usage, err := s.GetUsage(ctx, clientKey)
+		if err != nil {
+			return nil, err
+		}
+		items[clientKey.ID] = usage
+	}
+	return items, nil
+}
+
 func (s *Service) incrementWithTTL(ctx context.Context, key string, ttl time.Duration) (int64, error) {
 	return s.incrementByWithTTL(ctx, key, 1, ttl)
 }
@@ -120,6 +182,35 @@ func (s *Service) incrementByWithTTL(ctx context.Context, key string, amount int
 		return 0, err
 	}
 	return incr.Val(), nil
+}
+
+func (s *Service) readCounter(ctx context.Context, key string) (int64, error) {
+	value, err := s.redis.Get(ctx, key).Int64()
+	if err == nil {
+		return value, nil
+	}
+	if errors.Is(err, redis.Nil) {
+		return 0, nil
+	}
+	return 0, err
+}
+
+func limitRemaining(limit int, current int64) int64 {
+	if limit <= 0 {
+		return 0
+	}
+	remaining := int64(limit) - current
+	if remaining < 0 {
+		return 0
+	}
+	return remaining
+}
+
+func usagePercent(limit int, current int64) float64 {
+	if limit <= 0 {
+		return 0
+	}
+	return float64(current) * 100 / float64(limit)
 }
 
 func tomorrowUTC(now time.Time) time.Time {

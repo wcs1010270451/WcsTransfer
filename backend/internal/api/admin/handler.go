@@ -2,10 +2,12 @@ package admin
 
 import (
 	"bytes"
+	"context"
 	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -16,12 +18,14 @@ import (
 
 	"wcstransfer/backend/internal/entity"
 	"wcstransfer/backend/internal/repository"
+	"wcstransfer/backend/internal/service/clientquota"
 	"wcstransfer/backend/internal/service/keyhealth"
 )
 
 type Handler struct {
 	store     repository.AdminStore
 	keyHealth *keyhealth.Tracker
+	quota     *clientquota.Service
 }
 
 type createProviderRequest struct {
@@ -51,6 +55,10 @@ type createClientAPIKeyRequest struct {
 	RPMLimit          int     `json:"rpm_limit"`
 	DailyRequestLimit int     `json:"daily_request_limit"`
 	DailyTokenLimit   int     `json:"daily_token_limit"`
+	DailyCostLimit    float64 `json:"daily_cost_limit"`
+	MonthlyCostLimit  float64 `json:"monthly_cost_limit"`
+	WarningThreshold  float64 `json:"warning_threshold"`
+	AllowedModelIDs   []int64 `json:"allowed_model_ids"`
 	ExpiresAt         *string `json:"expires_at"`
 }
 
@@ -61,6 +69,10 @@ type updateClientAPIKeyRequest struct {
 	RPMLimit          int     `json:"rpm_limit"`
 	DailyRequestLimit int     `json:"daily_request_limit"`
 	DailyTokenLimit   int     `json:"daily_token_limit"`
+	DailyCostLimit    float64 `json:"daily_cost_limit"`
+	MonthlyCostLimit  float64 `json:"monthly_cost_limit"`
+	WarningThreshold  float64 `json:"warning_threshold"`
+	AllowedModelIDs   []int64 `json:"allowed_model_ids"`
 	ExpiresAt         *string `json:"expires_at"`
 }
 
@@ -87,31 +99,35 @@ type updateProviderKeyRequest struct {
 }
 
 type createModelRequest struct {
-	PublicName     string          `json:"public_name" binding:"required"`
-	ProviderID     int64           `json:"provider_id" binding:"required"`
-	UpstreamModel  string          `json:"upstream_model" binding:"required"`
-	RouteStrategy  string          `json:"route_strategy"`
-	IsEnabled      *bool           `json:"is_enabled"`
-	MaxTokens      int             `json:"max_tokens"`
-	Temperature    float64         `json:"temperature"`
-	TimeoutSeconds *int            `json:"timeout_seconds"`
-	Metadata       json.RawMessage `json:"metadata"`
+	PublicName      string          `json:"public_name" binding:"required"`
+	ProviderID      int64           `json:"provider_id" binding:"required"`
+	UpstreamModel   string          `json:"upstream_model" binding:"required"`
+	RouteStrategy   string          `json:"route_strategy"`
+	IsEnabled       *bool           `json:"is_enabled"`
+	MaxTokens       int             `json:"max_tokens"`
+	Temperature     float64         `json:"temperature"`
+	TimeoutSeconds  *int            `json:"timeout_seconds"`
+	InputCostPer1M  float64         `json:"input_cost_per_1m"`
+	OutputCostPer1M float64         `json:"output_cost_per_1m"`
+	Metadata        json.RawMessage `json:"metadata"`
 }
 
 type updateModelRequest struct {
-	PublicName     string          `json:"public_name" binding:"required"`
-	ProviderID     int64           `json:"provider_id" binding:"required"`
-	UpstreamModel  string          `json:"upstream_model" binding:"required"`
-	RouteStrategy  string          `json:"route_strategy"`
-	IsEnabled      *bool           `json:"is_enabled"`
-	MaxTokens      int             `json:"max_tokens"`
-	Temperature    float64         `json:"temperature"`
-	TimeoutSeconds *int            `json:"timeout_seconds"`
-	Metadata       json.RawMessage `json:"metadata"`
+	PublicName      string          `json:"public_name" binding:"required"`
+	ProviderID      int64           `json:"provider_id" binding:"required"`
+	UpstreamModel   string          `json:"upstream_model" binding:"required"`
+	RouteStrategy   string          `json:"route_strategy"`
+	IsEnabled       *bool           `json:"is_enabled"`
+	MaxTokens       int             `json:"max_tokens"`
+	Temperature     float64         `json:"temperature"`
+	TimeoutSeconds  *int            `json:"timeout_seconds"`
+	InputCostPer1M  float64         `json:"input_cost_per_1m"`
+	OutputCostPer1M float64         `json:"output_cost_per_1m"`
+	Metadata        json.RawMessage `json:"metadata"`
 }
 
-func NewHandler(store repository.AdminStore, tracker *keyhealth.Tracker) *Handler {
-	return &Handler{store: store, keyHealth: tracker}
+func NewHandler(store repository.AdminStore, tracker *keyhealth.Tracker, quota *clientquota.Service) *Handler {
+	return &Handler{store: store, keyHealth: tracker, quota: quota}
 }
 
 func (h *Handler) ListProviders(c *gin.Context) {
@@ -221,6 +237,11 @@ func (h *Handler) ListClientAPIKeys(c *gin.Context) {
 		writeDatabaseError(c, err)
 		return
 	}
+	items, err = h.enrichClientKeyUsage(c.Request.Context(), items)
+	if err != nil {
+		writeDatabaseError(c, err)
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"items": items,
@@ -253,6 +274,10 @@ func (h *Handler) CreateClientAPIKey(c *gin.Context) {
 		RPMLimit:          request.RPMLimit,
 		DailyRequestLimit: request.DailyRequestLimit,
 		DailyTokenLimit:   request.DailyTokenLimit,
+		DailyCostLimit:    request.DailyCostLimit,
+		MonthlyCostLimit:  request.MonthlyCostLimit,
+		WarningThreshold:  defaultFloat64(request.WarningThreshold, 80),
+		AllowedModelIDs:   normalizeInt64Slice(request.AllowedModelIDs),
 		ExpiresAt:         expiresAt,
 	}
 	if input.Name == "" {
@@ -300,6 +325,10 @@ func (h *Handler) UpdateClientAPIKey(c *gin.Context) {
 		RPMLimit:          request.RPMLimit,
 		DailyRequestLimit: request.DailyRequestLimit,
 		DailyTokenLimit:   request.DailyTokenLimit,
+		DailyCostLimit:    request.DailyCostLimit,
+		MonthlyCostLimit:  request.MonthlyCostLimit,
+		WarningThreshold:  defaultFloat64(request.WarningThreshold, 80),
+		AllowedModelIDs:   normalizeInt64Slice(request.AllowedModelIDs),
 		ExpiresAt:         expiresAt,
 	}
 	if input.Name == "" {
@@ -454,15 +483,17 @@ func (h *Handler) CreateModel(c *gin.Context) {
 	}
 
 	input := entity.CreateModelInput{
-		PublicName:     strings.TrimSpace(request.PublicName),
-		ProviderID:     request.ProviderID,
-		UpstreamModel:  strings.TrimSpace(request.UpstreamModel),
-		RouteStrategy:  defaultString(request.RouteStrategy, "fixed"),
-		IsEnabled:      defaultBool(request.IsEnabled, true),
-		MaxTokens:      request.MaxTokens,
-		Temperature:    request.Temperature,
-		TimeoutSeconds: defaultOptionalInt(request.TimeoutSeconds, 120),
-		Metadata:       normalizeJSON(request.Metadata),
+		PublicName:      strings.TrimSpace(request.PublicName),
+		ProviderID:      request.ProviderID,
+		UpstreamModel:   strings.TrimSpace(request.UpstreamModel),
+		RouteStrategy:   defaultString(request.RouteStrategy, "fixed"),
+		IsEnabled:       defaultBool(request.IsEnabled, true),
+		MaxTokens:       request.MaxTokens,
+		Temperature:     request.Temperature,
+		TimeoutSeconds:  defaultOptionalInt(request.TimeoutSeconds, 120),
+		InputCostPer1M:  request.InputCostPer1M,
+		OutputCostPer1M: request.OutputCostPer1M,
+		Metadata:        normalizeJSON(request.Metadata),
 	}
 
 	if input.PublicName == "" || input.ProviderID <= 0 || input.UpstreamModel == "" {
@@ -497,16 +528,18 @@ func (h *Handler) UpdateModel(c *gin.Context) {
 	}
 
 	input := entity.UpdateModelInput{
-		ID:             id,
-		PublicName:     strings.TrimSpace(request.PublicName),
-		ProviderID:     request.ProviderID,
-		UpstreamModel:  strings.TrimSpace(request.UpstreamModel),
-		RouteStrategy:  defaultString(request.RouteStrategy, "fixed"),
-		IsEnabled:      defaultBool(request.IsEnabled, true),
-		MaxTokens:      request.MaxTokens,
-		Temperature:    request.Temperature,
-		TimeoutSeconds: defaultOptionalInt(request.TimeoutSeconds, 120),
-		Metadata:       normalizeJSON(request.Metadata),
+		ID:              id,
+		PublicName:      strings.TrimSpace(request.PublicName),
+		ProviderID:      request.ProviderID,
+		UpstreamModel:   strings.TrimSpace(request.UpstreamModel),
+		RouteStrategy:   defaultString(request.RouteStrategy, "fixed"),
+		IsEnabled:       defaultBool(request.IsEnabled, true),
+		MaxTokens:       request.MaxTokens,
+		Temperature:     request.Temperature,
+		TimeoutSeconds:  defaultOptionalInt(request.TimeoutSeconds, 120),
+		InputCostPer1M:  request.InputCostPer1M,
+		OutputCostPer1M: request.OutputCostPer1M,
+		Metadata:        normalizeJSON(request.Metadata),
 	}
 
 	if input.PublicName == "" || input.ProviderID <= 0 || input.UpstreamModel == "" {
@@ -722,7 +755,156 @@ func (h *Handler) GetStats(c *gin.Context) {
 		return
 	}
 
+	clientKeys, err := h.store.ListClientAPIKeys(c.Request.Context())
+	if err != nil {
+		writeDatabaseError(c, err)
+		return
+	}
+	clientKeys, err = h.enrichClientKeyUsage(c.Request.Context(), clientKeys)
+	if err != nil {
+		writeDatabaseError(c, err)
+		return
+	}
+	stats.QuotaPressure = buildQuotaPressure(clientKeys, 5)
+	stats.BudgetPressure = buildBudgetPressure(clientKeys, 5)
+
 	c.JSON(http.StatusOK, stats)
+}
+
+func (h *Handler) enrichClientKeyUsage(ctx context.Context, items []entity.ClientAPIKey) ([]entity.ClientAPIKey, error) {
+	if h.quota == nil || len(items) == 0 {
+		return items, nil
+	}
+
+	usageByID, err := h.quota.GetUsageBatch(ctx, items)
+	if err != nil {
+		return nil, err
+	}
+
+	for index := range items {
+		usage, ok := usageByID[items[index].ID]
+		if !ok {
+			continue
+		}
+		usageCopy := usage
+		items[index].Usage = &usageCopy
+	}
+
+	return items, nil
+}
+
+func buildQuotaPressure(items []entity.ClientAPIKey, limit int) []entity.ClientQuotaPressure {
+	pressure := make([]entity.ClientQuotaPressure, 0)
+	for _, item := range items {
+		if item.Usage == nil {
+			continue
+		}
+
+		highest := maxUsagePercent(
+			item.Usage.RPMUsagePercent,
+			item.Usage.DailyRequestUsagePercent,
+			item.Usage.DailyTokenUsagePercent,
+		)
+		if highest <= 0 {
+			continue
+		}
+
+		dimensions := make([]string, 0, 3)
+		if item.Usage.IsRPMLimited {
+			dimensions = append(dimensions, "rpm")
+		}
+		if item.Usage.IsDailyRequestLimited {
+			dimensions = append(dimensions, "daily_requests")
+		}
+		if item.Usage.IsDailyTokenLimited {
+			dimensions = append(dimensions, "daily_tokens")
+		}
+		if len(dimensions) == 0 && highest < 60 {
+			continue
+		}
+
+		pressure = append(pressure, entity.ClientQuotaPressure{
+			ClientAPIKeyID:           item.ID,
+			ClientAPIKeyName:         item.Name,
+			HighestUsagePercent:      highest,
+			RPMUsagePercent:          item.Usage.RPMUsagePercent,
+			DailyRequestUsagePercent: item.Usage.DailyRequestUsagePercent,
+			DailyTokenUsagePercent:   item.Usage.DailyTokenUsagePercent,
+			LimitedDimensions:        dimensions,
+		})
+	}
+
+	sort.Slice(pressure, func(i, j int) bool {
+		if pressure[i].HighestUsagePercent == pressure[j].HighestUsagePercent {
+			return pressure[i].ClientAPIKeyID > pressure[j].ClientAPIKeyID
+		}
+		return pressure[i].HighestUsagePercent > pressure[j].HighestUsagePercent
+	})
+
+	if limit > 0 && len(pressure) > limit {
+		return pressure[:limit]
+	}
+	return pressure
+}
+
+func maxUsagePercent(values ...float64) float64 {
+	var max float64
+	for _, value := range values {
+		if value > max {
+			max = value
+		}
+	}
+	return max
+}
+
+func buildBudgetPressure(items []entity.ClientAPIKey, limit int) []entity.ClientBudgetPressure {
+	pressure := make([]entity.ClientBudgetPressure, 0)
+	for _, item := range items {
+		if item.CostUsage == nil {
+			continue
+		}
+
+		highest := maxUsagePercent(
+			item.CostUsage.DailyCostUsagePercent,
+			item.CostUsage.MonthlyCostUsagePercent,
+		)
+		if highest <= 0 {
+			continue
+		}
+
+		dimensions := make([]string, 0, 2)
+		if item.CostUsage.IsDailyCostLimited {
+			dimensions = append(dimensions, "daily_cost")
+		}
+		if item.CostUsage.IsMonthlyCostLimited {
+			dimensions = append(dimensions, "monthly_cost")
+		}
+		if len(dimensions) == 0 && !item.CostUsage.IsWarningTriggered && highest < 60 {
+			continue
+		}
+
+		pressure = append(pressure, entity.ClientBudgetPressure{
+			ClientAPIKeyID:          item.ID,
+			ClientAPIKeyName:        item.Name,
+			HighestUsagePercent:     highest,
+			DailyCostUsagePercent:   item.CostUsage.DailyCostUsagePercent,
+			MonthlyCostUsagePercent: item.CostUsage.MonthlyCostUsagePercent,
+			IsWarningTriggered:      item.CostUsage.IsWarningTriggered,
+			LimitedDimensions:       dimensions,
+		})
+	}
+
+	sort.Slice(pressure, func(i, j int) bool {
+		if pressure[i].HighestUsagePercent == pressure[j].HighestUsagePercent {
+			return pressure[i].ClientAPIKeyID > pressure[j].ClientAPIKeyID
+		}
+		return pressure[i].HighestUsagePercent > pressure[j].HighestUsagePercent
+	})
+
+	if limit > 0 && len(pressure) > limit {
+		return pressure[:limit]
+	}
+	return pressure
 }
 
 func writeBadRequest(c *gin.Context, message string) {
@@ -799,6 +981,14 @@ func defaultOptionalInt(value *int, fallback int) int {
 	}
 
 	return *value
+}
+
+func defaultFloat64(value float64, fallback float64) float64 {
+	if value == 0 {
+		return fallback
+	}
+
+	return value
 }
 
 func defaultBool(value *bool, fallback bool) bool {
@@ -893,4 +1083,25 @@ func parseOptionalTime(value *string) (*time.Time, bool) {
 	}
 
 	return &parsed, true
+}
+
+func normalizeInt64Slice(values []int64) []int64 {
+	if len(values) == 0 {
+		return nil
+	}
+
+	seen := make(map[int64]struct{}, len(values))
+	items := make([]int64, 0, len(values))
+	for _, value := range values {
+		if value <= 0 {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		items = append(items, value)
+	}
+
+	return items
 }

@@ -114,6 +114,7 @@ func NewHandler(
 
 func (h *Handler) ListModels(c *gin.Context) {
 	items := make([]gin.H, 0)
+	clientKey, hasClientKey := middleware.ClientAPIKeyFromContext(c)
 	if h.store != nil {
 		models, err := h.store.ListEnabledModels(c.Request.Context())
 		if err != nil {
@@ -127,6 +128,9 @@ func (h *Handler) ListModels(c *gin.Context) {
 		}
 
 		for _, model := range models {
+			if hasClientKey && !clientKeyAllowsModel(clientKey, model.PublicName) {
+				continue
+			}
 			items = append(items, gin.H{
 				"id":         model.PublicName,
 				"object":     "model",
@@ -146,6 +150,12 @@ func (h *Handler) ListModels(c *gin.Context) {
 func (h *Handler) ChatCompletions(c *gin.Context) {
 	h.handleChatCompletions(c, chatCompletionOptions{
 		RequestType: "chat_completions",
+	})
+}
+
+func (h *Handler) Embeddings(c *gin.Context) {
+	h.handleEmbeddings(c, chatCompletionOptions{
+		RequestType: "embeddings",
 	})
 }
 
@@ -175,6 +185,39 @@ func (h *Handler) AdminDebugChatCompletions(c *gin.Context) {
 	h.handleChatCompletions(c, chatCompletionOptions{
 		RequestBody:      request.Payload,
 		RequestType:      "chat_completions_debug",
+		RouteStrategy:    routeStrategy,
+		ProviderKeyID:    request.ProviderKeyID,
+		IgnoreKeyHealth:  request.ProviderKeyID > 0,
+		EmitDebugHeaders: true,
+	})
+}
+
+func (h *Handler) AdminDebugEmbeddings(c *gin.Context) {
+	var request adminDebugChatRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": gin.H{
+				"message": "invalid request body",
+				"type":    "invalid_request",
+			},
+		})
+		return
+	}
+
+	routeStrategy := strings.TrimSpace(request.RouteStrategy)
+	if routeStrategy != "" && !isSupportedRouteStrategy(routeStrategy) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": gin.H{
+				"message": "route_strategy must be one of fixed, failover, round_robin",
+				"type":    "invalid_request",
+			},
+		})
+		return
+	}
+
+	h.handleEmbeddings(c, chatCompletionOptions{
+		RequestBody:      request.Payload,
+		RequestType:      "embeddings_debug",
 		RouteStrategy:    routeStrategy,
 		ProviderKeyID:    request.ProviderKeyID,
 		IgnoreKeyHealth:  request.ProviderKeyID > 0,
@@ -251,6 +294,49 @@ func (h *Handler) handleChatCompletions(c *gin.Context, options chatCompletionOp
 		return
 	}
 	logState.modelPublicName = publicModel
+	if clientKey, ok := middleware.ClientAPIKeyFromContext(c); ok {
+		if !clientKeyAllowsModel(clientKey, publicModel) {
+			logState.httpStatus = http.StatusForbidden
+			logState.errorType = "model_forbidden"
+			logState.errorMessage = "client api key is not allowed to access this model"
+			logState.responsePayload = wrappedPayloadJSON(map[string]any{
+				"error": map[string]any{
+					"message": logState.errorMessage,
+					"type":    logState.errorType,
+				},
+			})
+			h.writeDebugHeaders(c.Writer.Header(), logState, options)
+			c.JSON(http.StatusForbidden, gin.H{
+				"error": gin.H{
+					"message": logState.errorMessage,
+					"type":    logState.errorType,
+				},
+			})
+			return
+		}
+		if exceeded, message := clientKeyBudgetExceeded(clientKey); exceeded {
+			logState.httpStatus = http.StatusTooManyRequests
+			logState.errorType = "budget_exceeded"
+			logState.errorMessage = message
+			logState.responsePayload = wrappedPayloadJSON(map[string]any{
+				"error": map[string]any{
+					"message": logState.errorMessage,
+					"type":    logState.errorType,
+				},
+			})
+			h.writeDebugHeaders(c.Writer.Header(), logState, options)
+			c.JSON(http.StatusTooManyRequests, gin.H{
+				"error": gin.H{
+					"message": logState.errorMessage,
+					"type":    logState.errorType,
+				},
+			})
+			return
+		}
+		if clientKey.CostUsage != nil && clientKey.CostUsage.IsWarningTriggered {
+			logState.metadata["budget_warning"] = true
+		}
+	}
 
 	streamRequested := extractStreamFlag(payload)
 	logState.metadata["stream"] = streamRequested
@@ -275,6 +361,8 @@ func (h *Handler) handleChatCompletions(c *gin.Context, options chatCompletionOp
 	logState.metadata["provider_slug"] = route.Provider.Slug
 	logState.metadata["provider_type"] = route.Provider.ProviderType
 	logState.metadata["route_strategy"] = route.Model.RouteStrategy
+	logState.metadata["input_cost_per_1m"] = route.Model.InputCostPer1M
+	logState.metadata["output_cost_per_1m"] = route.Model.OutputCostPer1M
 
 	route, err = applyChatRouteOptions(route, options, logState.metadata)
 	if err != nil {
@@ -420,7 +508,7 @@ func (h *Handler) handleChatCompletions(c *gin.Context, options chatCompletionOp
 		if isStreamingResponse(responseContentType) {
 			defer response.Body.Close()
 			logState.metadata["stream_response"] = true
-			preview, truncated, streamErr := streamUpstreamResponse(c, response.Body, logState.metadata, &logState)
+			preview, truncated, streamErr := streamUpstreamResponse(c, response.Body, logState.metadata, &logState, route.Model)
 			logState.responsePayload = wrappedPayloadJSON(map[string]any{
 				"content_type": responseContentType,
 				"stream":       true,
@@ -461,7 +549,244 @@ func (h *Handler) handleChatCompletions(c *gin.Context, options chatCompletionOp
 			logState.errorMessage = extractErrorMessage(responseBody)
 		}
 
-		applyUsage(logState.metadata, &logState, responseBody)
+		applyUsage(logState.metadata, &logState, responseBody, route.Model)
+
+		if _, err := c.Writer.Write(responseBody); err != nil {
+			logState.success = false
+			logState.errorType = "client_write_error"
+			logState.errorMessage = err.Error()
+		}
+		return
+	}
+}
+
+func (h *Handler) handleEmbeddings(c *gin.Context, options chatCompletionOptions) {
+	startedAt := time.Now()
+	logState := chatLogState{
+		traceID:       strings.TrimSpace(c.Writer.Header().Get("X-Request-Id")),
+		requestType:   firstNonEmpty(options.RequestType, "embeddings"),
+		clientIP:      c.ClientIP(),
+		requestMethod: c.Request.Method,
+		requestPath:   c.FullPath(),
+		metadata:      map[string]any{},
+	}
+	if clientKey, ok := middleware.ClientAPIKeyFromContext(c); ok {
+		logState.clientAPIKeyID = clientKey.ID
+		logState.clientAPIKeyName = clientKey.Name
+		logState.metadata["client_api_key_name"] = clientKey.Name
+		defer func(key entity.ClientAPIKey) {
+			if logState.totalTokens > 0 {
+				_ = h.quota.AddTokenUsage(c.Request.Context(), key, logState.totalTokens)
+			}
+		}(clientKey)
+	}
+	defer func() {
+		h.writeRequestLog(c.Request.Context(), startedAt, logState)
+	}()
+
+	writeJSONError := func(statusCode int, errorType string, message string) {
+		logState.httpStatus = statusCode
+		logState.errorType = errorType
+		logState.errorMessage = message
+		logState.responsePayload = wrappedPayloadJSON(map[string]any{
+			"error": map[string]any{"message": message, "type": errorType},
+		})
+		h.writeDebugHeaders(c.Writer.Header(), logState, options)
+		c.JSON(statusCode, gin.H{
+			"error": gin.H{"message": message, "type": errorType},
+		})
+	}
+
+	if h.store == nil {
+		writeJSONError(http.StatusServiceUnavailable, "service_unavailable", "model store is not configured")
+		return
+	}
+
+	body := options.RequestBody
+	if len(body) == 0 {
+		var err error
+		body, err = io.ReadAll(c.Request.Body)
+		if err != nil {
+			writeJSONError(http.StatusBadRequest, "invalid_request", "failed to read request body")
+			return
+		}
+	}
+	logState.requestPayload = payloadForStorage(body, "application/json", false)
+
+	payload, publicModel, err := parseEmbeddingsPayload(body)
+	if err != nil {
+		writeJSONError(http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	logState.modelPublicName = publicModel
+	if clientKey, ok := middleware.ClientAPIKeyFromContext(c); ok {
+		if !clientKeyAllowsModel(clientKey, publicModel) {
+			writeJSONError(http.StatusForbidden, "model_forbidden", "client api key is not allowed to access this model")
+			return
+		}
+		if exceeded, message := clientKeyBudgetExceeded(clientKey); exceeded {
+			writeJSONError(http.StatusTooManyRequests, "budget_exceeded", message)
+			return
+		}
+		if clientKey.CostUsage != nil && clientKey.CostUsage.IsWarningTriggered {
+			logState.metadata["budget_warning"] = true
+		}
+	}
+
+	route, err := h.store.ResolveModelRoute(c.Request.Context(), publicModel)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeJSONError(http.StatusNotFound, "not_found", "model not found or unavailable")
+			return
+		}
+		writeJSONError(http.StatusInternalServerError, "database_error", err.Error())
+		return
+	}
+
+	logState.upstreamModel = route.Model.UpstreamModel
+	logState.providerID = route.Provider.ID
+	logState.metadata["provider_slug"] = route.Provider.Slug
+	logState.metadata["provider_type"] = route.Provider.ProviderType
+	logState.metadata["route_strategy"] = route.Model.RouteStrategy
+	logState.metadata["input_cost_per_1m"] = route.Model.InputCostPer1M
+	logState.metadata["output_cost_per_1m"] = route.Model.OutputCostPer1M
+
+	route, err = applyChatRouteOptions(route, options, logState.metadata)
+	if err != nil {
+		writeJSONError(http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
+	attempts, skippedKeys, err := h.buildProxyAttempts(route, options.IgnoreKeyHealth)
+	if err != nil {
+		writeJSONError(http.StatusServiceUnavailable, "routing_error", err.Error())
+		return
+	}
+	logState.metadata["candidate_key_count"] = len(route.Keys)
+	if len(skippedKeys) > 0 {
+		logState.metadata["temporarily_skipped_keys"] = skippedKeys
+	}
+
+	payload["model"] = route.Model.UpstreamModel
+	rewrittenBody, err := json.Marshal(payload)
+	if err != nil {
+		writeJSONError(http.StatusInternalServerError, "internal_error", "failed to encode upstream payload")
+		return
+	}
+
+	timeout := 120 * time.Second
+	if route.Model.TimeoutSeconds > 0 {
+		timeout = time.Duration(route.Model.TimeoutSeconds) * time.Second
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), timeout)
+	defer cancel()
+
+	failoverCount := 0
+	retryCount := 0
+	attemptMetadata := make([]map[string]any, 0, len(attempts))
+	logState.metadata["routing_attempts"] = attemptMetadata
+
+	for attemptIndex, attempt := range attempts {
+		hasNextAttempt := attemptIndex < len(attempts)-1
+		logState.providerKeyID = attempt.Key.ID
+		logState.metadata["provider_key_name"] = attempt.Key.Name
+
+		upstreamRequest, err := http.NewRequestWithContext(
+			ctx,
+			http.MethodPost,
+			buildUpstreamURL(route.Provider.BaseURL, "/embeddings"),
+			bytes.NewReader(rewrittenBody),
+		)
+		if err != nil {
+			writeJSONError(http.StatusInternalServerError, "internal_error", "failed to create upstream request")
+			return
+		}
+		upstreamRequest.Header.Set("Authorization", "Bearer "+attempt.Key.APIKey)
+		upstreamRequest.Header.Set("Content-Type", contentTypeOrDefault(c.GetHeader("Content-Type"), "application/json"))
+		upstreamRequest.Header.Set("Accept", contentTypeOrDefault(c.GetHeader("Accept"), "application/json"))
+		copyOptionalHeader(c, upstreamRequest, "OpenAI-Beta")
+
+		attemptRecord := map[string]any{
+			"attempt":           attemptIndex + 1,
+			"phase":             attempt.Phase,
+			"provider_key_id":   attempt.Key.ID,
+			"provider_key_name": attempt.Key.Name,
+		}
+
+		response, requestErr := h.httpClient.Do(upstreamRequest)
+		if requestErr != nil {
+			h.penalizeKey(attempt.Key.ID, keyCooldownTransient, "request_error")
+			attemptRecord["error_type"] = "upstream_error"
+			attemptRecord["error_message"] = requestErr.Error()
+			attemptRecord["retryable"] = true
+			if hasNextAttempt {
+				attemptRecord["decision"] = nextAttemptDecision(attempts[attemptIndex+1].Phase)
+				attemptMetadata = append(attemptMetadata, attemptRecord)
+				if attempts[attemptIndex+1].Key.ID == attempt.Key.ID {
+					retryCount++
+				} else {
+					failoverCount++
+				}
+				continue
+			}
+			attemptRecord["decision"] = "return_error"
+			attemptMetadata = append(attemptMetadata, attemptRecord)
+			logState.metadata["routing_attempts"] = attemptMetadata
+			logState.metadata["failover_count"] = failoverCount
+			logState.metadata["retry_count"] = retryCount
+			writeJSONError(http.StatusBadGateway, "upstream_error", requestErr.Error())
+			return
+		}
+
+		responseContentType := response.Header.Get("Content-Type")
+		attemptRecord["http_status"] = response.StatusCode
+		attemptRecord["response_content_type"] = responseContentType
+
+		if shouldFailoverStatus(response.StatusCode) && hasNextAttempt {
+			responseBody, _ := io.ReadAll(response.Body)
+			_ = response.Body.Close()
+			h.applyStatusPenalty(attempt.Key.ID, response.StatusCode)
+			attemptRecord["error_type"] = "upstream_response_error"
+			attemptRecord["error_message"] = extractErrorMessage(responseBody)
+			attemptRecord["decision"] = nextAttemptDecision(attempts[attemptIndex+1].Phase)
+			attemptMetadata = append(attemptMetadata, attemptRecord)
+			if attempts[attemptIndex+1].Key.ID == attempt.Key.ID {
+				retryCount++
+			} else {
+				failoverCount++
+			}
+			continue
+		}
+
+		attemptRecord["decision"] = "return_response"
+		attemptMetadata = append(attemptMetadata, attemptRecord)
+		logState.metadata["routing_attempts"] = attemptMetadata
+		logState.metadata["failover_count"] = failoverCount
+		logState.metadata["retry_count"] = retryCount
+		logState.httpStatus = response.StatusCode
+		logState.success = response.StatusCode >= 200 && response.StatusCode < 300
+		logState.metadata["response_content_type"] = responseContentType
+		if logState.success {
+			h.clearKeyPenalty(attempt.Key.ID)
+		}
+
+		h.writeDebugHeaders(c.Writer.Header(), logState, options)
+		copyResponseHeaders(c.Writer.Header(), response.Header)
+		c.Status(response.StatusCode)
+
+		responseBody, readErr := io.ReadAll(response.Body)
+		_ = response.Body.Close()
+		if readErr != nil {
+			writeJSONError(http.StatusBadGateway, "upstream_read_error", readErr.Error())
+			return
+		}
+
+		logState.responsePayload = payloadForStorage(responseBody, responseContentType, false)
+		if !logState.success && logState.errorType == "" {
+			logState.errorType = "upstream_response_error"
+			logState.errorMessage = extractErrorMessage(responseBody)
+		}
+		applyUsage(logState.metadata, &logState, responseBody, route.Model)
 
 		if _, err := c.Writer.Write(responseBody); err != nil {
 			logState.success = false
@@ -486,6 +811,27 @@ func parseChatCompletionPayload(body []byte) (map[string]any, string, error) {
 	modelName, ok := rawModel.(string)
 	if !ok || strings.TrimSpace(modelName) == "" {
 		return nil, "", errors.New("model must be a non-empty string")
+	}
+
+	return payload, strings.TrimSpace(modelName), nil
+}
+
+func parseEmbeddingsPayload(body []byte) (map[string]any, string, error) {
+	payload := make(map[string]any)
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, "", errors.New("request body must be valid JSON")
+	}
+
+	rawModel, ok := payload["model"]
+	if !ok {
+		return nil, "", errors.New("model is required")
+	}
+	modelName, ok := rawModel.(string)
+	if !ok || strings.TrimSpace(modelName) == "" {
+		return nil, "", errors.New("model must be a non-empty string")
+	}
+	if _, ok := payload["input"]; !ok {
+		return nil, "", errors.New("input is required")
 	}
 
 	return payload, strings.TrimSpace(modelName), nil
@@ -854,7 +1200,7 @@ func payloadForStorage(body []byte, contentType string, streamed bool) json.RawM
 	})
 }
 
-func streamUpstreamResponse(c *gin.Context, body io.Reader, metadata map[string]any, state *chatLogState) ([]byte, bool, error) {
+func streamUpstreamResponse(c *gin.Context, body io.Reader, metadata map[string]any, state *chatLogState, model entity.Model) ([]byte, bool, error) {
 	buffer := make([]byte, 32*1024)
 	flusher, _ := c.Writer.(http.Flusher)
 	preview := bytes.NewBuffer(nil)
@@ -885,7 +1231,7 @@ func streamUpstreamResponse(c *gin.Context, body io.Reader, metadata map[string]
 			}
 
 			parser.Write(chunk)
-			extractUsageFromStreamBuffer(parser, metadata, state)
+			extractUsageFromStreamBuffer(parser, metadata, state, model)
 		}
 
 		if err != nil {
@@ -898,7 +1244,7 @@ func streamUpstreamResponse(c *gin.Context, body io.Reader, metadata map[string]
 	}
 }
 
-func extractUsageFromStreamBuffer(buffer *bytes.Buffer, metadata map[string]any, state *chatLogState) {
+func extractUsageFromStreamBuffer(buffer *bytes.Buffer, metadata map[string]any, state *chatLogState, model entity.Model) {
 	for {
 		raw := buffer.Bytes()
 		separatorIndex := bytes.Index(raw, []byte("\n\n"))
@@ -922,7 +1268,7 @@ func extractUsageFromStreamBuffer(buffer *bytes.Buffer, metadata map[string]any,
 				continue
 			}
 
-			applyUsage(metadata, state, payload)
+			applyUsage(metadata, state, payload, model)
 		}
 	}
 }
@@ -936,7 +1282,7 @@ func wrappedPayloadJSON(value map[string]any) json.RawMessage {
 	return body
 }
 
-func applyUsage(metadata map[string]any, state *chatLogState, responseBody []byte) {
+func applyUsage(metadata map[string]any, state *chatLogState, responseBody []byte, model entity.Model) {
 	var payload map[string]any
 	if err := json.Unmarshal(responseBody, &payload); err != nil {
 		return
@@ -950,7 +1296,9 @@ func applyUsage(metadata map[string]any, state *chatLogState, responseBody []byt
 	state.promptTokens = intFromAny(usageRaw["prompt_tokens"])
 	state.completionTokens = intFromAny(usageRaw["completion_tokens"])
 	state.totalTokens = intFromAny(usageRaw["total_tokens"])
+	state.estimatedCost = estimatedCostForUsage(state.promptTokens, state.completionTokens, model)
 	metadata["has_usage"] = true
+	metadata["estimated_cost"] = state.estimatedCost
 }
 
 func intFromAny(value any) int {
@@ -981,4 +1329,40 @@ func extractErrorMessage(responseBody []byte) string {
 	}
 
 	return strings.TrimSpace(message)
+}
+
+func clientKeyAllowsModel(clientKey entity.ClientAPIKey, modelPublicName string) bool {
+	if len(clientKey.AllowedModels) == 0 {
+		return true
+	}
+
+	target := strings.TrimSpace(modelPublicName)
+	for _, allowed := range clientKey.AllowedModels {
+		if strings.EqualFold(strings.TrimSpace(allowed), target) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func clientKeyBudgetExceeded(clientKey entity.ClientAPIKey) (bool, string) {
+	if clientKey.CostUsage == nil {
+		return false, ""
+	}
+	if clientKey.CostUsage.IsDailyCostLimited {
+		return true, "client daily cost budget exceeded"
+	}
+	if clientKey.CostUsage.IsMonthlyCostLimited {
+		return true, "client monthly cost budget exceeded"
+	}
+	return false, ""
+}
+
+func estimatedCostForUsage(promptTokens int, completionTokens int, model entity.Model) float64 {
+	if promptTokens <= 0 && completionTokens <= 0 {
+		return 0
+	}
+
+	return (float64(promptTokens)*model.InputCostPer1M + float64(completionTokens)*model.OutputCostPer1M) / 1_000_000
 }

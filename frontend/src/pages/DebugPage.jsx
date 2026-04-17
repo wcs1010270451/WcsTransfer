@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { App, Button, Card, Form, Input, InputNumber, Select, Space, Switch, Tag, Typography } from "antd";
-import { debugChatCompletion, debugChatCompletionStream, fetchKeys, fetchModels } from "../api/client";
+import { debugChatCompletion, debugChatCompletionStream, debugEmbeddings, fetchKeys, fetchModels } from "../api/client";
 import PageHeaderCard from "../components/PageHeaderCard";
 
 const routeStrategyOptions = [
@@ -8,6 +8,11 @@ const routeStrategyOptions = [
   { label: "fixed", value: "fixed" },
   { label: "failover", value: "failover" },
   { label: "round_robin", value: "round_robin" },
+];
+
+const requestTypeOptions = [
+  { label: "chat_completions", value: "chat" },
+  { label: "embeddings", value: "embeddings" },
 ];
 
 export default function DebugPage() {
@@ -24,6 +29,7 @@ export default function DebugPage() {
   const [streamUsage, setStreamUsage] = useState(null);
   const abortRef = useRef(null);
   const [form] = Form.useForm();
+  const requestType = Form.useWatch("request_type", form);
   const selectedModelName = Form.useWatch("model", form);
   const selectedProviderKeyID = Form.useWatch("provider_key_id", form);
 
@@ -44,6 +50,7 @@ export default function DebugPage() {
     load();
     form.setFieldsValue({
       route_strategy: "",
+      request_type: "chat",
       provider_key_id: undefined,
       temperature: undefined,
       max_tokens: undefined,
@@ -64,22 +71,22 @@ export default function DebugPage() {
     setStreamUsage(null);
 
     try {
-      const payload = {
-        model: values.model,
-        stream: Boolean(values.stream),
-        messages: [],
-      };
-
-      if (values.system_prompt) {
-        payload.messages.push({ role: "system", content: values.system_prompt });
-      }
-      payload.messages.push({ role: "user", content: values.user_message });
-
-      if (values.temperature !== undefined && values.temperature !== null) {
-        payload.temperature = values.temperature;
-      }
-      if (values.max_tokens !== undefined && values.max_tokens !== null) {
-        payload.max_tokens = values.max_tokens;
+      const payload = { model: values.model };
+      if (values.request_type === "chat") {
+        payload.stream = Boolean(values.stream);
+        payload.messages = [];
+        if (values.system_prompt) {
+          payload.messages.push({ role: "system", content: values.system_prompt });
+        }
+        payload.messages.push({ role: "user", content: values.user_message });
+        if (values.temperature !== undefined && values.temperature !== null) {
+          payload.temperature = values.temperature;
+        }
+        if (values.max_tokens !== undefined && values.max_tokens !== null) {
+          payload.max_tokens = values.max_tokens;
+        }
+      } else {
+        payload.input = values.embedding_input;
       }
 
       const requestPayload = {
@@ -89,7 +96,7 @@ export default function DebugPage() {
       };
 
       let response;
-      if (values.stream) {
+      if (values.request_type === "chat" && values.stream) {
         const controller = new AbortController();
         abortRef.current = controller;
         response = await debugChatCompletionStream(requestPayload, {
@@ -102,6 +109,8 @@ export default function DebugPage() {
             setResultStatus(update.status || 0);
           },
         });
+      } else if (values.request_type === "embeddings") {
+        response = await debugEmbeddings(requestPayload);
       } else {
         response = await debugChatCompletion(requestPayload);
       }
@@ -166,6 +175,10 @@ export default function DebugPage() {
               />
             </Form.Item>
 
+            <Form.Item label="Request Type" name="request_type">
+              <Select options={requestTypeOptions} />
+            </Form.Item>
+
             <Form.Item label="Provider Key" name="provider_key_id" extra="Leave empty to follow the model's current routing strategy. Choosing a key forces the request to that key.">
               <Select
                 allowClear
@@ -182,19 +195,23 @@ export default function DebugPage() {
               <Select disabled={Boolean(selectedProviderKeyID)} options={routeStrategyOptions} />
             </Form.Item>
 
-            <Form.Item label="System Prompt" name="system_prompt">
+            <Form.Item label="System Prompt" name="system_prompt" hidden={requestType !== "chat"}>
               <Input.TextArea rows={3} placeholder="Optional system instruction" />
             </Form.Item>
 
-            <Form.Item label="Stream" name="stream" valuePropName="checked" extra="Turn this on to test real-time SSE forwarding from the gateway.">
+            <Form.Item label="Stream" name="stream" valuePropName="checked" hidden={requestType !== "chat"} extra="Turn this on to test real-time SSE forwarding from the gateway.">
               <Switch />
             </Form.Item>
 
-            <Form.Item label="User Message" name="user_message" rules={[{ required: true, message: "Enter a user message" }]}>
+            <Form.Item label="User Message" name="user_message" hidden={requestType !== "chat"} rules={requestType === "chat" ? [{ required: true, message: "Enter a user message" }] : []}>
               <Input.TextArea rows={6} placeholder="Ask the model something to validate routing behavior" />
             </Form.Item>
 
-            <Space size={16} wrap>
+            <Form.Item label="Embedding Input" name="embedding_input" hidden={requestType !== "embeddings"} rules={requestType === "embeddings" ? [{ required: true, message: "Enter embedding input" }] : []}>
+              <Input.TextArea rows={6} placeholder="Text to embed" />
+            </Form.Item>
+
+            <Space size={16} wrap hidden={requestType !== "chat"}>
               <Form.Item label="Temperature" name="temperature" style={{ minWidth: 180 }}>
                 <InputNumber min={0} max={2} step={0.1} style={{ width: "100%" }} />
               </Form.Item>
@@ -207,7 +224,7 @@ export default function DebugPage() {
               <Button type="primary" htmlType="submit" loading={submitting}>
                 Send Debug Request
               </Button>
-              <Button danger onClick={stopStream} disabled={!submitting || !form.getFieldValue("stream")}>
+              <Button danger onClick={stopStream} disabled={!submitting || !form.getFieldValue("stream") || requestType !== "chat"}>
                 Stop Stream
               </Button>
               <Button
@@ -242,7 +259,9 @@ export default function DebugPage() {
 
           <Card size="small" title="Assistant preview">
             <Typography.Paragraph style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}>
-              {assistantMessage || "No response yet"}
+              {requestType === "embeddings"
+                ? JSON.stringify(result?.data?.[0]?.embedding ? result.data[0].embedding.slice(0, 16) : result, null, 2)
+                : assistantMessage || "No response yet"}
             </Typography.Paragraph>
           </Card>
 

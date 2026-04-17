@@ -41,19 +41,21 @@ type ProviderKey struct {
 }
 
 type Model struct {
-	ID             int64           `json:"id"`
-	PublicName     string          `json:"public_name"`
-	ProviderID     int64           `json:"provider_id"`
-	ProviderName   string          `json:"provider_name"`
-	UpstreamModel  string          `json:"upstream_model"`
-	RouteStrategy  string          `json:"route_strategy"`
-	IsEnabled      bool            `json:"is_enabled"`
-	MaxTokens      int             `json:"max_tokens"`
-	Temperature    float64         `json:"temperature"`
-	TimeoutSeconds int             `json:"timeout_seconds"`
-	Metadata       json.RawMessage `json:"metadata"`
-	CreatedAt      time.Time       `json:"created_at"`
-	UpdatedAt      time.Time       `json:"updated_at"`
+	ID              int64           `json:"id"`
+	PublicName      string          `json:"public_name"`
+	ProviderID      int64           `json:"provider_id"`
+	ProviderName    string          `json:"provider_name"`
+	UpstreamModel   string          `json:"upstream_model"`
+	RouteStrategy   string          `json:"route_strategy"`
+	IsEnabled       bool            `json:"is_enabled"`
+	MaxTokens       int             `json:"max_tokens"`
+	Temperature     float64         `json:"temperature"`
+	TimeoutSeconds  int             `json:"timeout_seconds"`
+	InputCostPer1M  float64         `json:"input_cost_per_1m"`
+	OutputCostPer1M float64         `json:"output_cost_per_1m"`
+	Metadata        json.RawMessage `json:"metadata"`
+	CreatedAt       time.Time       `json:"created_at"`
+	UpdatedAt       time.Time       `json:"updated_at"`
 }
 
 type ModelRoute struct {
@@ -63,21 +65,59 @@ type ModelRoute struct {
 }
 
 type ClientAPIKey struct {
-	ID               int64      `json:"id"`
-	Name             string     `json:"name"`
-	MaskedKey        string     `json:"masked_key"`
-	PlainAPIKey      string     `json:"plain_api_key,omitempty"`
-	Status           string     `json:"status"`
-	Description      string     `json:"description"`
-	RPMLimit         int        `json:"rpm_limit"`
-	DailyRequestLimit int       `json:"daily_request_limit"`
-	DailyTokenLimit  int        `json:"daily_token_limit"`
-	ExpiresAt        *time.Time `json:"expires_at,omitempty"`
-	LastUsedAt       *time.Time `json:"last_used_at,omitempty"`
-	LastErrorAt      *time.Time `json:"last_error_at,omitempty"`
-	LastErrorMessage string     `json:"last_error_message"`
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
+	ID                int64             `json:"id"`
+	Name              string            `json:"name"`
+	MaskedKey         string            `json:"masked_key"`
+	PlainAPIKey       string            `json:"plain_api_key,omitempty"`
+	Status            string            `json:"status"`
+	Description       string            `json:"description"`
+	RPMLimit          int               `json:"rpm_limit"`
+	DailyRequestLimit int               `json:"daily_request_limit"`
+	DailyTokenLimit   int               `json:"daily_token_limit"`
+	DailyCostLimit    float64           `json:"daily_cost_limit"`
+	MonthlyCostLimit  float64           `json:"monthly_cost_limit"`
+	WarningThreshold  float64           `json:"warning_threshold"`
+	AllowedModelIDs   []int64           `json:"allowed_model_ids"`
+	AllowedModels     []string          `json:"allowed_models"`
+	Usage             *ClientQuotaUsage `json:"usage,omitempty"`
+	CostUsage         *ClientCostUsage  `json:"cost_usage,omitempty"`
+	ExpiresAt         *time.Time        `json:"expires_at,omitempty"`
+	LastUsedAt        *time.Time        `json:"last_used_at,omitempty"`
+	LastErrorAt       *time.Time        `json:"last_error_at,omitempty"`
+	LastErrorMessage  string            `json:"last_error_message"`
+	CreatedAt         time.Time         `json:"created_at"`
+	UpdatedAt         time.Time         `json:"updated_at"`
+}
+
+type ClientQuotaUsage struct {
+	CurrentRPM               int64      `json:"current_rpm"`
+	DailyRequestsUsed        int64      `json:"daily_requests_used"`
+	DailyTokensUsed          int64      `json:"daily_tokens_used"`
+	RPMRemaining             int64      `json:"rpm_remaining"`
+	DailyRequestsRemaining   int64      `json:"daily_requests_remaining"`
+	DailyTokensRemaining     int64      `json:"daily_tokens_remaining"`
+	RPMUsagePercent          float64    `json:"rpm_usage_percent"`
+	DailyRequestUsagePercent float64    `json:"daily_request_usage_percent"`
+	DailyTokenUsagePercent   float64    `json:"daily_token_usage_percent"`
+	RPMResetAt               *time.Time `json:"rpm_reset_at,omitempty"`
+	DailyResetAt             *time.Time `json:"daily_reset_at,omitempty"`
+	IsRPMLimited             bool       `json:"is_rpm_limited"`
+	IsDailyRequestLimited    bool       `json:"is_daily_request_limited"`
+	IsDailyTokenLimited      bool       `json:"is_daily_token_limited"`
+}
+
+type ClientCostUsage struct {
+	DailyCostUsed           float64    `json:"daily_cost_used"`
+	MonthlyCostUsed         float64    `json:"monthly_cost_used"`
+	DailyCostRemaining      float64    `json:"daily_cost_remaining"`
+	MonthlyCostRemaining    float64    `json:"monthly_cost_remaining"`
+	DailyCostUsagePercent   float64    `json:"daily_cost_usage_percent"`
+	MonthlyCostUsagePercent float64    `json:"monthly_cost_usage_percent"`
+	DailyResetAt            *time.Time `json:"daily_reset_at,omitempty"`
+	MonthlyResetAt          *time.Time `json:"monthly_reset_at,omitempty"`
+	IsDailyCostLimited      bool       `json:"is_daily_cost_limited"`
+	IsMonthlyCostLimited    bool       `json:"is_monthly_cost_limited"`
+	IsWarningTriggered      bool       `json:"is_warning_triggered"`
 }
 
 type RequestLog struct {
@@ -134,23 +174,28 @@ type RequestLogPage struct {
 }
 
 type DashboardStats struct {
-	WindowHours       int                 `json:"window_hours"`
-	ProviderCount     int                 `json:"provider_count"`
-	KeyCount          int                 `json:"key_count"`
-	ActiveKeyCount    int                 `json:"active_key_count"`
-	ModelCount        int                 `json:"model_count"`
-	EnabledModelCount int                 `json:"enabled_model_count"`
-	RequestCount      int64               `json:"request_count"`
-	SuccessCount      int64               `json:"success_count"`
-	FailedCount       int64               `json:"failed_count"`
-	SuccessRate       float64             `json:"success_rate"`
-	AverageLatencyMS  float64             `json:"average_latency_ms"`
-	PromptTokens      int64               `json:"prompt_tokens"`
-	CompletionTokens  int64               `json:"completion_tokens"`
-	TotalTokens       int64               `json:"total_tokens"`
-	EstimatedCost     float64             `json:"estimated_cost"`
-	TopModels         []ModelUsageStat    `json:"top_models"`
-	TopProviders      []ProviderUsageStat `json:"top_providers"`
+	WindowHours          int                    `json:"window_hours"`
+	ProviderCount        int                    `json:"provider_count"`
+	KeyCount             int                    `json:"key_count"`
+	ActiveKeyCount       int                    `json:"active_key_count"`
+	ClientKeyCount       int                    `json:"client_key_count"`
+	ActiveClientKeyCount int                    `json:"active_client_key_count"`
+	ModelCount           int                    `json:"model_count"`
+	EnabledModelCount    int                    `json:"enabled_model_count"`
+	RequestCount         int64                  `json:"request_count"`
+	SuccessCount         int64                  `json:"success_count"`
+	FailedCount          int64                  `json:"failed_count"`
+	SuccessRate          float64                `json:"success_rate"`
+	AverageLatencyMS     float64                `json:"average_latency_ms"`
+	PromptTokens         int64                  `json:"prompt_tokens"`
+	CompletionTokens     int64                  `json:"completion_tokens"`
+	TotalTokens          int64                  `json:"total_tokens"`
+	EstimatedCost        float64                `json:"estimated_cost"`
+	TopModels            []ModelUsageStat       `json:"top_models"`
+	TopProviders         []ProviderUsageStat    `json:"top_providers"`
+	TopClients           []ClientUsageStat      `json:"top_clients"`
+	QuotaPressure        []ClientQuotaPressure  `json:"quota_pressure"`
+	BudgetPressure       []ClientBudgetPressure `json:"budget_pressure"`
 }
 
 type ModelUsageStat struct {
@@ -172,6 +217,38 @@ type ProviderUsageStat struct {
 	SuccessRate      float64 `json:"success_rate"`
 	AverageLatencyMS float64 `json:"average_latency_ms"`
 	TotalTokens      int64   `json:"total_tokens"`
+}
+
+type ClientUsageStat struct {
+	ClientAPIKeyID   int64   `json:"client_api_key_id"`
+	ClientAPIKeyName string  `json:"client_api_key_name"`
+	RequestCount     int64   `json:"request_count"`
+	SuccessCount     int64   `json:"success_count"`
+	FailedCount      int64   `json:"failed_count"`
+	SuccessRate      float64 `json:"success_rate"`
+	AverageLatencyMS float64 `json:"average_latency_ms"`
+	TotalTokens      int64   `json:"total_tokens"`
+	EstimatedCost    float64 `json:"estimated_cost"`
+}
+
+type ClientQuotaPressure struct {
+	ClientAPIKeyID           int64    `json:"client_api_key_id"`
+	ClientAPIKeyName         string   `json:"client_api_key_name"`
+	HighestUsagePercent      float64  `json:"highest_usage_percent"`
+	RPMUsagePercent          float64  `json:"rpm_usage_percent"`
+	DailyRequestUsagePercent float64  `json:"daily_request_usage_percent"`
+	DailyTokenUsagePercent   float64  `json:"daily_token_usage_percent"`
+	LimitedDimensions        []string `json:"limited_dimensions"`
+}
+
+type ClientBudgetPressure struct {
+	ClientAPIKeyID          int64    `json:"client_api_key_id"`
+	ClientAPIKeyName        string   `json:"client_api_key_name"`
+	HighestUsagePercent     float64  `json:"highest_usage_percent"`
+	DailyCostUsagePercent   float64  `json:"daily_cost_usage_percent"`
+	MonthlyCostUsagePercent float64  `json:"monthly_cost_usage_percent"`
+	IsWarningTriggered      bool     `json:"is_warning_triggered"`
+	LimitedDimensions       []string `json:"limited_dimensions"`
 }
 
 type CreateRequestLogInput struct {
@@ -200,24 +277,32 @@ type CreateRequestLogInput struct {
 }
 
 type CreateClientAPIKeyInput struct {
-	Name        string
-	Status      string
-	Description string
-	RPMLimit    int
+	Name              string
+	Status            string
+	Description       string
+	RPMLimit          int
 	DailyRequestLimit int
-	DailyTokenLimit int
-	ExpiresAt   *time.Time
+	DailyTokenLimit   int
+	DailyCostLimit    float64
+	MonthlyCostLimit  float64
+	WarningThreshold  float64
+	AllowedModelIDs   []int64
+	ExpiresAt         *time.Time
 }
 
 type UpdateClientAPIKeyInput struct {
-	ID          int64
-	Name        string
-	Status      string
-	Description string
-	RPMLimit    int
+	ID                int64
+	Name              string
+	Status            string
+	Description       string
+	RPMLimit          int
 	DailyRequestLimit int
-	DailyTokenLimit int
-	ExpiresAt   *time.Time
+	DailyTokenLimit   int
+	DailyCostLimit    float64
+	MonthlyCostLimit  float64
+	WarningThreshold  float64
+	AllowedModelIDs   []int64
+	ExpiresAt         *time.Time
 }
 
 type CreateProviderInput struct {
@@ -265,26 +350,30 @@ type UpdateProviderKeyInput struct {
 }
 
 type CreateModelInput struct {
-	PublicName     string
-	ProviderID     int64
-	UpstreamModel  string
-	RouteStrategy  string
-	IsEnabled      bool
-	MaxTokens      int
-	Temperature    float64
-	TimeoutSeconds int
-	Metadata       json.RawMessage
+	PublicName      string
+	ProviderID      int64
+	UpstreamModel   string
+	RouteStrategy   string
+	IsEnabled       bool
+	MaxTokens       int
+	Temperature     float64
+	TimeoutSeconds  int
+	InputCostPer1M  float64
+	OutputCostPer1M float64
+	Metadata        json.RawMessage
 }
 
 type UpdateModelInput struct {
-	ID             int64
-	PublicName     string
-	ProviderID     int64
-	UpstreamModel  string
-	RouteStrategy  string
-	IsEnabled      bool
-	MaxTokens      int
-	Temperature    float64
-	TimeoutSeconds int
-	Metadata       json.RawMessage
+	ID              int64
+	PublicName      string
+	ProviderID      int64
+	UpstreamModel   string
+	RouteStrategy   string
+	IsEnabled       bool
+	MaxTokens       int
+	Temperature     float64
+	TimeoutSeconds  int
+	InputCostPer1M  float64
+	OutputCostPer1M float64
+	Metadata        json.RawMessage
 }

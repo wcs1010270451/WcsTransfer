@@ -2,6 +2,7 @@ import { useState } from "react";
 import {
   ApiOutlined,
   AppstoreOutlined,
+  BookOutlined,
   ContactsOutlined,
   DatabaseOutlined,
   ExperimentOutlined,
@@ -22,6 +23,7 @@ const menuItems = [
   { key: "/client-keys", icon: <ContactsOutlined />, label: "Client Keys" },
   { key: "/keys", icon: <KeyOutlined />, label: "Keys" },
   { key: "/models", icon: <ApiOutlined />, label: "Models" },
+  { key: "/docs", icon: <BookOutlined />, label: "API Docs" },
   { key: "/debug", icon: <ExperimentOutlined />, label: "Debug" },
   { key: "/logs", icon: <FileTextOutlined />, label: "Logs" },
 ];

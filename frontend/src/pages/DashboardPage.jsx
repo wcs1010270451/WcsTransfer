@@ -84,6 +84,13 @@ export default function DashboardPage() {
         </Col>
         <Col xs={24} md={12} xl={6}>
           <MetricCard
+            title="Client Keys"
+            value={state.stats?.active_client_key_count ?? 0}
+            hint={`Total ${state.stats?.client_key_count ?? 0}, active ${state.stats?.active_client_key_count ?? 0}`}
+          />
+        </Col>
+        <Col xs={24} md={12} xl={6}>
+          <MetricCard
             title="Tokens (24h)"
             value={state.stats?.total_tokens ?? 0}
             hint={
@@ -185,7 +192,7 @@ export default function DashboardPage() {
       </Row>
 
       <Row gutter={[18, 18]}>
-        <Col xs={24} xl={10}>
+        <Col xs={24} xl={8}>
           <section className="panel-card">
             <Typography.Title level={4}>Top Providers</Typography.Title>
             <List
@@ -213,7 +220,103 @@ export default function DashboardPage() {
           </section>
         </Col>
 
-        <Col xs={24} xl={14}>
+        <Col xs={24} xl={8}>
+          <section className="panel-card">
+            <Typography.Title level={4}>Top Clients</Typography.Title>
+            <List
+              dataSource={state.stats?.top_clients || []}
+              locale={{ emptyText: "No client traffic in the last 24 hours" }}
+              renderItem={(item) => (
+                <List.Item>
+                  <div className="log-list-item">
+                    <div>
+                      <Typography.Text strong>{item.client_api_key_name}</Typography.Text>
+                      <Typography.Paragraph type="secondary" className="log-subtitle">
+                        {item.request_count} requests, {item.total_tokens} tokens, ${Number(item.estimated_cost || 0).toFixed(4)}
+                      </Typography.Paragraph>
+                    </div>
+                    <Space direction="vertical" size={4} align="end">
+                      <Tag color={item.success_rate >= 95 ? "green" : item.success_rate >= 80 ? "gold" : "red"}>
+                        {Number(item.success_rate).toFixed(1)}%
+                      </Tag>
+                      <Typography.Text type="secondary">{Number(item.average_latency_ms).toFixed(1)} ms</Typography.Text>
+                    </Space>
+                  </div>
+                </List.Item>
+              )}
+            />
+          </section>
+        </Col>
+
+        <Col xs={24} xl={8}>
+          <section className="panel-card">
+            <Typography.Title level={4}>Quota Pressure</Typography.Title>
+            <List
+              dataSource={state.stats?.quota_pressure || []}
+              locale={{ emptyText: "No client key is close to its configured limit" }}
+              renderItem={(item) => (
+                <List.Item>
+                  <div className="log-list-item">
+                    <div>
+                      <Typography.Text strong>{item.client_api_key_name}</Typography.Text>
+                      <Typography.Paragraph type="secondary" className="log-subtitle">
+                        RPM {Number(item.rpm_usage_percent ?? 0).toFixed(1)}% | Req {Number(item.daily_request_usage_percent ?? 0).toFixed(1)}% | Token {Number(item.daily_token_usage_percent ?? 0).toFixed(1)}%
+                      </Typography.Paragraph>
+                    </div>
+                    <Space direction="vertical" size={4} align="end">
+                      <Tag color={item.highest_usage_percent >= 100 ? "red" : item.highest_usage_percent >= 80 ? "gold" : "blue"}>
+                        {Number(item.highest_usage_percent ?? 0).toFixed(1)}%
+                      </Tag>
+                      <Typography.Text type="secondary">
+                        {(item.limited_dimensions || []).length > 0 ? item.limited_dimensions.join(", ") : "watch"}
+                      </Typography.Text>
+                    </Space>
+                  </div>
+                </List.Item>
+              )}
+            />
+          </section>
+        </Col>
+      </Row>
+
+      <Row gutter={[18, 18]}>
+        <Col xs={24}>
+          <section className="panel-card">
+            <Typography.Title level={4}>Budget Pressure</Typography.Title>
+            <List
+              dataSource={state.stats?.budget_pressure || []}
+              locale={{ emptyText: "No client key is close to its configured budget" }}
+              renderItem={(item) => (
+                <List.Item>
+                  <div className="log-list-item">
+                    <div>
+                      <Typography.Text strong>{item.client_api_key_name}</Typography.Text>
+                      <Typography.Paragraph type="secondary" className="log-subtitle">
+                        Day {Number(item.daily_cost_usage_percent ?? 0).toFixed(1)}% | Month {Number(item.monthly_cost_usage_percent ?? 0).toFixed(1)}%
+                      </Typography.Paragraph>
+                    </div>
+                    <Space direction="vertical" size={4} align="end">
+                      <Tag color={item.highest_usage_percent >= 100 ? "red" : item.highest_usage_percent >= 80 ? "gold" : "blue"}>
+                        {Number(item.highest_usage_percent ?? 0).toFixed(1)}%
+                      </Tag>
+                      <Typography.Text type="secondary">
+                        {(item.limited_dimensions || []).length > 0
+                          ? item.limited_dimensions.join(", ")
+                          : item.is_warning_triggered
+                            ? "warning"
+                            : "watch"}
+                      </Typography.Text>
+                    </Space>
+                  </div>
+                </List.Item>
+              )}
+            />
+          </section>
+        </Col>
+      </Row>
+
+      <Row gutter={[18, 18]}>
+        <Col xs={24}>
           <section className="panel-card">
             <Typography.Title level={4}>Recent Requests</Typography.Title>
             <List

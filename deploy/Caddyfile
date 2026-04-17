@@ -1,0 +1,39 @@
+{
+    email {$ACME_EMAIL:ops@example.com}
+}
+
+{$DOMAIN:localhost} {
+    encode gzip zstd
+
+    handle /healthz {
+        reverse_proxy backend:8080
+    }
+
+    handle /version {
+        reverse_proxy backend:8080
+    }
+
+    handle /openapi.json {
+        reverse_proxy backend:8080
+    }
+
+    handle /docs* {
+        reverse_proxy backend:8080
+    }
+
+    handle /redoc* {
+        reverse_proxy backend:8080
+    }
+
+    handle /v1/* {
+        reverse_proxy backend:8080
+    }
+
+    handle /admin/* {
+        reverse_proxy backend:8080
+    }
+
+    handle {
+        reverse_proxy frontend:80
+    }
+}

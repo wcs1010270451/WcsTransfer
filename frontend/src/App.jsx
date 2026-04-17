@@ -7,6 +7,7 @@ import KeysPage from "./pages/KeysPage";
 import ModelsPage from "./pages/ModelsPage";
 import LogsPage from "./pages/LogsPage";
 import DebugPage from "./pages/DebugPage";
+import ApiDocsPage from "./pages/ApiDocsPage";
 
 export default function App() {
   return (
@@ -18,6 +19,7 @@ export default function App() {
         <Route path="/client-keys" element={<ClientKeysPage />} />
         <Route path="/keys" element={<KeysPage />} />
         <Route path="/models" element={<ModelsPage />} />
+        <Route path="/docs" element={<ApiDocsPage />} />
         <Route path="/debug" element={<DebugPage />} />
         <Route path="/logs" element={<LogsPage />} />
       </Route>

@@ -13,6 +13,8 @@ services:
       - ./backend/migrations/0001_init.up.sql:/docker-entrypoint-initdb.d/0001_init.sql:ro
       - ./backend/migrations/0002_client_api_keys.up.sql:/docker-entrypoint-initdb.d/0002_client_api_keys.sql:ro
       - ./backend/migrations/0003_client_key_quotas.up.sql:/docker-entrypoint-initdb.d/0003_client_key_quotas.sql:ro
+      - ./backend/migrations/0004_client_key_model_access.up.sql:/docker-entrypoint-initdb.d/0004_client_key_model_access.sql:ro
+      - ./backend/migrations/0005_model_pricing_and_client_budgets.up.sql:/docker-entrypoint-initdb.d/0005_model_pricing_and_client_budgets.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U wcstransfer -d wcstransfer"]
       interval: 5s

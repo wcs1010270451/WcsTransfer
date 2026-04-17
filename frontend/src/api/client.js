@@ -128,6 +128,15 @@ export const debugChatCompletion = async (payload) => {
   };
 };
 
+export const debugEmbeddings = async (payload) => {
+  const response = await createClient().post("/admin/debug/embeddings", payload);
+  return {
+    data: response.data,
+    headers: response.headers,
+    status: response.status,
+  };
+};
+
 export const debugChatCompletionStream = async (payload, options = {}) => {
   const { apiBaseUrl } = useSettingsStore.getState();
   const response = await fetch(`${apiBaseUrl}/admin/debug/chat/completions`, {

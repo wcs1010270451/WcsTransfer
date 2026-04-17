@@ -58,6 +58,8 @@ export default function ModelsPage() {
       timeout_seconds: 120,
       temperature: 0.7,
       max_tokens: 0,
+      input_cost_per_1m: 0,
+      output_cost_per_1m: 0,
       metadata: "{}",
     });
     setOpen(true);
@@ -74,6 +76,8 @@ export default function ModelsPage() {
       max_tokens: record.max_tokens,
       temperature: record.temperature,
       timeout_seconds: record.timeout_seconds,
+      input_cost_per_1m: record.input_cost_per_1m,
+      output_cost_per_1m: record.output_cost_per_1m,
       metadata: formatJSON(record.metadata),
     });
     setOpen(true);
@@ -121,6 +125,8 @@ export default function ModelsPage() {
         max_tokens: record.max_tokens,
         temperature: record.temperature,
         timeout_seconds: record.timeout_seconds,
+        input_cost_per_1m: record.input_cost_per_1m,
+        output_cost_per_1m: record.output_cost_per_1m,
         metadata: record.metadata || {},
       });
       message.success("Model status updated");
@@ -154,6 +160,18 @@ export default function ModelsPage() {
             { title: "Provider", dataIndex: "provider_name", key: "provider_name" },
             { title: "Upstream Model", dataIndex: "upstream_model", key: "upstream_model" },
             { title: "Strategy", dataIndex: "route_strategy", key: "route_strategy" },
+            {
+              title: "Input $/1M",
+              dataIndex: "input_cost_per_1m",
+              key: "input_cost_per_1m",
+              render: (value) => Number(value || 0).toFixed(4),
+            },
+            {
+              title: "Output $/1M",
+              dataIndex: "output_cost_per_1m",
+              key: "output_cost_per_1m",
+              render: (value) => Number(value || 0).toFixed(4),
+            },
             {
               title: "Enabled",
               dataIndex: "is_enabled",
@@ -198,6 +216,8 @@ export default function ModelsPage() {
             is_enabled: true,
             timeout_seconds: 120,
             temperature: 0.7,
+            input_cost_per_1m: 0,
+            output_cost_per_1m: 0,
           }}
         >
           <Form.Item label="Public Model" name="public_name" rules={[{ required: true }]}>
@@ -229,6 +249,12 @@ export default function ModelsPage() {
           </Form.Item>
           <Form.Item label="Timeout Seconds" name="timeout_seconds">
             <InputNumber min={1} style={{ width: "100%" }} />
+          </Form.Item>
+          <Form.Item label="Input Cost Per 1M Tokens" name="input_cost_per_1m" extra="USD per 1,000,000 prompt tokens">
+            <InputNumber min={0} step={0.0001} style={{ width: "100%" }} />
+          </Form.Item>
+          <Form.Item label="Output Cost Per 1M Tokens" name="output_cost_per_1m" extra="USD per 1,000,000 completion tokens">
+            <InputNumber min={0} step={0.0001} style={{ width: "100%" }} />
           </Form.Item>
           <Form.Item label="Metadata JSON" name="metadata">
             <Input.TextArea rows={4} placeholder='{"tier":"default"}' />

@@ -66,3 +66,58 @@ The first PostgreSQL startup automatically applies the backend migrations, inclu
 
 - `backend/migrations/0002_client_api_keys.up.sql`
 - `backend/migrations/0003_client_key_quotas.up.sql`
+
+## Production Deployment
+
+The repository now includes a production stack in `docker-compose.prod.yml` with:
+
+- PostgreSQL
+- Redis
+- one-shot migration runner
+- backend API
+- frontend static console
+- Caddy edge proxy with automatic HTTPS
+
+Supporting files:
+
+- `backend/scripts/run-migrations.sh`
+- `frontend/Dockerfile`
+- `frontend/nginx.conf`
+- `deploy/Caddyfile`
+- `.env.prod.example`
+
+Deployment steps:
+
+1. Copy `.env.prod.example` to `.env.prod`
+2. Set at least:
+   - `DOMAIN`
+   - `PUBLIC_BASE_URL`
+   - `POSTGRES_PASSWORD`
+   - `ADMIN_TOKEN`
+   - `ACME_EMAIL`
+3. Bring up the production stack:
+
+```powershell
+docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
+```
+
+What the production stack does:
+
+- Caddy terminates HTTPS on `80/443`
+- frontend is served behind the same public domain
+- backend is only exposed internally to the proxy
+- migrations are applied automatically before backend startup
+
+Recommended public routes:
+
+- `https://your-domain/`
+- `https://your-domain/docs`
+- `https://your-domain/redoc`
+- `https://your-domain/openapi.json`
+
+Operational notes:
+
+- `ADMIN_TOKEN` should be rotated away from any development value
+- `PUBLIC_BASE_URL` should match the final external origin exactly
+- current CORS policy is set from `PUBLIC_BASE_URL`
+- if you already run an external reverse proxy or load balancer, you can reuse the backend/frontend services and skip Caddy

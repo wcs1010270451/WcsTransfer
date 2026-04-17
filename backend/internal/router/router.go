@@ -39,10 +39,13 @@ func New(cfg config.Config, deps *platform.Dependencies, stores *Stores) *gin.En
 	}
 	systemHandler := system.NewHandler(cfg, deps)
 	openAIHandler := openai.NewHandler(resolvedStores.Public, resolvedStores.Log, nil, tracker, quota)
-	adminHandler := admin.NewHandler(resolvedStores.Admin, tracker)
+	adminHandler := admin.NewHandler(resolvedStores.Admin, tracker, quota)
 
 	engine.GET("/healthz", systemHandler.Healthz)
 	engine.GET("/version", systemHandler.Version)
+	engine.GET("/openapi.json", systemHandler.OpenAPI)
+	engine.GET("/docs", systemHandler.SwaggerUI)
+	engine.GET("/redoc", systemHandler.ReDoc)
 
 	v1 := engine.Group("/v1")
 	v1.Use(middleware.PublicAPIAuth(resolvedStores.Auth))
@@ -50,6 +53,7 @@ func New(cfg config.Config, deps *platform.Dependencies, stores *Stores) *gin.En
 	{
 		v1.GET("/models", openAIHandler.ListModels)
 		v1.POST("/chat/completions", openAIHandler.ChatCompletions)
+		v1.POST("/embeddings", openAIHandler.Embeddings)
 	}
 
 	adminGroup := engine.Group("/admin")
@@ -72,6 +76,7 @@ func New(cfg config.Config, deps *platform.Dependencies, stores *Stores) *gin.En
 		adminGroup.GET("/logs/:id", adminHandler.GetLogDetail)
 		adminGroup.GET("/stats", adminHandler.GetStats)
 		adminGroup.POST("/debug/chat/completions", openAIHandler.AdminDebugChatCompletions)
+		adminGroup.POST("/debug/embeddings", openAIHandler.AdminDebugEmbeddings)
 	}
 
 	return engine
