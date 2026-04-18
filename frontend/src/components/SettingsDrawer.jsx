@@ -24,7 +24,7 @@ export default function SettingsDrawer({ open, onClose }) {
       destroyOnClose
     >
       <Typography.Paragraph type="secondary">
-        修改后端地址和后台令牌后，会保存到浏览器本地存储，刷新页面也会保留。
+        管理令牌只保存在当前浏览器会话中，不会被打包进前端静态资源。
       </Typography.Paragraph>
       <Form
         layout="vertical"
@@ -44,7 +44,7 @@ export default function SettingsDrawer({ open, onClose }) {
           name="adminToken"
           rules={[{ required: true, message: "请输入后台令牌" }]}
         >
-          <Input.Password placeholder="change-me" />
+          <Input.Password placeholder="Paste admin bearer token" />
         </Form.Item>
         <Space>
           <Button onClick={onClose}>取消</Button>

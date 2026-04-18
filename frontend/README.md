@@ -24,6 +24,7 @@ The local Vite dev server runs on `http://localhost:3211`.
 Create `.env` from `.env.example` if you want to override defaults:
 
 - `VITE_API_BASE_URL=http://localhost:8080`
-- `VITE_ADMIN_TOKEN=change-me`
+- `VITE_APP_BASE_PATH=/console/`
 
-You can also edit both values from the top-right settings drawer after the app starts.
+The admin token is entered from the top-right settings drawer after the app starts.
+It is stored in `sessionStorage` only for the current browser session.

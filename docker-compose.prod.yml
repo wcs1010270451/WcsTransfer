@@ -81,7 +81,7 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_API_BASE_URL: ${PUBLIC_BASE_URL:-https://api.example.com}
-        VITE_ADMIN_TOKEN: ${ADMIN_TOKEN:?set ADMIN_TOKEN}
+        VITE_APP_BASE_PATH: /console/
     expose:
       - "80"
     healthcheck:
@@ -101,6 +101,8 @@ services:
     environment:
       DOMAIN: ${DOMAIN:-localhost}
       ACME_EMAIL: ${ACME_EMAIL:-ops@example.com}
+      ADMIN_UI_USER: ${ADMIN_UI_USER:?set ADMIN_UI_USER}
+      ADMIN_UI_PASSWORD_HASH: ${ADMIN_UI_PASSWORD_HASH:?set ADMIN_UI_PASSWORD_HASH}
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

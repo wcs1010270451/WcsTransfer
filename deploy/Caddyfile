@@ -5,6 +5,9 @@
 {$DOMAIN:localhost} {
     encode gzip zstd
 
+    redir / /console/ 308
+    redir /console /console/ 308
+
     handle /healthz {
         reverse_proxy backend:8080
     }
@@ -33,7 +36,15 @@
         reverse_proxy backend:8080
     }
 
-    handle {
+    handle /console/* {
+        basic_auth {
+            {$ADMIN_UI_USER} {$ADMIN_UI_PASSWORD_HASH}
+        }
+        uri strip_prefix /console
         reverse_proxy frontend:80
+    }
+
+    handle {
+        respond "not found" 404
     }
 }

@@ -8,8 +8,8 @@ WcsTransfer is a model gateway project with:
 The current repository includes a runnable backend skeleton with:
 
 - health and version endpoints
-- OpenAI-style API placeholders
-- admin API placeholders
+- OpenAI-compatible model listing and proxy endpoints
+- admin configuration and observability APIs
 - basic request ID and admin auth middleware
 - PostgreSQL schema migration
 - Docker Compose for local development
@@ -21,6 +21,10 @@ cd backend
 go mod tidy
 go run ./cmd/server
 ```
+
+Recommended local toolchain:
+
+- Go `1.24.5+`
 
 Optional environment variables:
 
@@ -94,6 +98,8 @@ Deployment steps:
    - `PUBLIC_BASE_URL`
    - `POSTGRES_PASSWORD`
    - `ADMIN_TOKEN`
+   - `ADMIN_UI_USER`
+   - `ADMIN_UI_PASSWORD_HASH`
    - `ACME_EMAIL`
 3. Bring up the production stack:
 
@@ -104,13 +110,14 @@ docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
 What the production stack does:
 
 - Caddy terminates HTTPS on `80/443`
-- frontend is served behind the same public domain
+- frontend console is served at `/console/`
+- `/console/*` is protected with Caddy Basic Auth
 - backend is only exposed internally to the proxy
 - migrations are applied automatically before backend startup
 
 Recommended public routes:
 
-- `https://your-domain/`
+- `https://your-domain/console/`
 - `https://your-domain/docs`
 - `https://your-domain/redoc`
 - `https://your-domain/openapi.json`
@@ -118,6 +125,8 @@ Recommended public routes:
 Operational notes:
 
 - `ADMIN_TOKEN` should be rotated away from any development value
+- do not inject `ADMIN_TOKEN` into frontend build args or static files
+- generate `ADMIN_UI_PASSWORD_HASH` with `caddy hash-password --plaintext 'your-password'`
 - `PUBLIC_BASE_URL` should match the final external origin exactly
 - current CORS policy is set from `PUBLIC_BASE_URL`
 - if you already run an external reverse proxy or load balancer, you can reuse the backend/frontend services and skip Caddy
