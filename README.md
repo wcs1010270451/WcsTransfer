@@ -44,6 +44,11 @@ Available endpoints:
 - `GET /version`
 - `GET /v1/models`
 - `POST /v1/chat/completions`
+- `POST /v1/messages`
+- `POST /portal/auth/register`
+- `POST /portal/auth/login`
+- `GET /portal/me`
+- `GET /portal/client-keys`
 - `GET /admin/client-keys`
 - `POST /admin/client-keys`
 - `GET /admin/providers`
@@ -70,6 +75,59 @@ The first PostgreSQL startup automatically applies the backend migrations, inclu
 
 - `backend/migrations/0002_client_api_keys.up.sql`
 - `backend/migrations/0003_client_key_quotas.up.sql`
+- `backend/migrations/0006_add_anthropic_provider_type.up.sql`
+- `backend/migrations/0007_tenants_and_tenant_users.up.sql`
+
+## Tenant Portal
+
+The repository now includes a first-pass tenant portal for self-service client key management.
+
+Tenant user flow:
+
+- register a workspace with `POST /portal/auth/register`
+- sign in with `POST /portal/auth/login`
+- call `GET /portal/me` with the returned bearer token
+- create and disable tenant-owned client keys through `/portal/client-keys`
+
+Frontend routes under the console base path:
+
+- `/portal/login`
+- `/portal/keys`
+
+Backend requirement:
+
+- set `AUTH_TOKEN_SECRET` to a non-default value before deploying beyond local development
+
+## Anthropic Provider Setup
+
+WcsTransfer supports Anthropic's official Messages API directly.
+
+Recommended provider configuration:
+
+- `provider_type`: `anthropic`
+- `base_url`: `https://api.anthropic.com`
+- `extra_config`:
+
+```json
+{
+  "anthropic_version": "2023-06-01"
+}
+```
+
+Important:
+
+- do not set `base_url` to a full endpoint such as `https://api.anthropic.com/v1/messages`
+- the gateway appends `/v1/messages` automatically
+- Anthropic provider keys should be Claude Console API keys
+
+Example public request:
+
+```powershell
+curl.exe -X POST http://localhost:3210/v1/messages `
+  -H "Authorization: Bearer <client_api_key>" `
+  -H "Content-Type: application/json" `
+  -d "{\"model\":\"claude-sonnet-4\",\"max_tokens\":1024,\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}"
+```
 
 ## Production Deployment
 

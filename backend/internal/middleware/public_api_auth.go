@@ -39,6 +39,15 @@ func PublicAPIAuth(store repository.ClientAuthStore) gin.HandlerFunc {
 			})
 			return
 		}
+		if clientKey.TenantID > 0 && clientKey.TenantWalletBalance <= 0 {
+			c.AbortWithStatusJSON(402, gin.H{
+				"error": gin.H{
+					"message": "tenant wallet balance is empty",
+					"type":    "wallet_empty",
+				},
+			})
+			return
+		}
 
 		c.Set(clientAPIKeyContextKey, clientKey)
 		c.Next()

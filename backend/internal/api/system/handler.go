@@ -168,8 +168,10 @@ func (h *Handler) OpenAPI(c *gin.Context) {
 			"max_tokens":         gin.H{"type": "integer"},
 			"temperature":        gin.H{"type": "number"},
 			"timeout_seconds":    gin.H{"type": "integer"},
-			"input_cost_per_1m":  gin.H{"type": "number"},
-			"output_cost_per_1m": gin.H{"type": "number"},
+			"cost_input_per_1m":  gin.H{"type": "number"},
+			"cost_output_per_1m": gin.H{"type": "number"},
+			"sale_input_per_1m":  gin.H{"type": "number"},
+			"sale_output_per_1m": gin.H{"type": "number"},
 			"metadata":           gin.H{"type": "object"},
 			"created_at":         gin.H{"type": "string", "format": "date-time"},
 			"updated_at":         gin.H{"type": "string", "format": "date-time"},
@@ -194,7 +196,8 @@ func (h *Handler) OpenAPI(c *gin.Context) {
 			"prompt_tokens":     gin.H{"type": "integer"},
 			"completion_tokens": gin.H{"type": "integer"},
 			"total_tokens":      gin.H{"type": "integer"},
-			"estimated_cost":    gin.H{"type": "number"},
+			"cost_amount":       gin.H{"type": "number"},
+			"billable_amount":   gin.H{"type": "number"},
 			"error_type":        gin.H{"type": "string"},
 			"error_message":     gin.H{"type": "string"},
 			"created_at":        gin.H{"type": "string", "format": "date-time"},
@@ -214,7 +217,8 @@ func (h *Handler) OpenAPI(c *gin.Context) {
 			"prompt_tokens_24h":       gin.H{"type": "integer"},
 			"completion_tokens_24h":   gin.H{"type": "integer"},
 			"total_tokens_24h":        gin.H{"type": "integer"},
-			"estimated_cost_24h":      gin.H{"type": "number"},
+			"cost_amount_24h":         gin.H{"type": "number"},
+			"billable_amount_24h":     gin.H{"type": "number"},
 			"top_models":              gin.H{"type": "array", "items": gin.H{"type": "object"}},
 			"top_providers":           gin.H{"type": "array", "items": gin.H{"type": "object"}},
 			"top_clients":             gin.H{"type": "array", "items": gin.H{"type": "object"}},
@@ -342,6 +346,39 @@ func (h *Handler) OpenAPI(c *gin.Context) {
 					},
 					"responses": gin.H{
 						"200": gin.H{"description": "Embeddings response"},
+						"401": gin.H{"description": "Unauthorized", "content": gin.H{"application/json": gin.H{"schema": gin.H{"$ref": "#/components/schemas/Error"}}}},
+						"403": gin.H{"description": "Model forbidden", "content": gin.H{"application/json": gin.H{"schema": gin.H{"$ref": "#/components/schemas/Error"}}}},
+						"429": gin.H{"description": "Quota or budget exceeded", "content": gin.H{"application/json": gin.H{"schema": gin.H{"$ref": "#/components/schemas/Error"}}}},
+					},
+				},
+			},
+			"/v1/messages": gin.H{
+				"post": gin.H{
+					"summary":  "Create Anthropic messages",
+					"security": []gin.H{{"bearerAuth": []string{}}},
+					"requestBody": gin.H{
+						"required": true,
+						"content": gin.H{
+							"application/json": gin.H{
+								"schema": gin.H{
+									"type": "object",
+									"properties": gin.H{
+										"model":      gin.H{"type": "string"},
+										"max_tokens": gin.H{"type": "integer"},
+										"messages": gin.H{
+											"type":  "array",
+											"items": gin.H{"type": "object"},
+										},
+										"stream": gin.H{"type": "boolean"},
+										"system": gin.H{},
+									},
+									"required": []string{"model", "messages", "max_tokens"},
+								},
+							},
+						},
+					},
+					"responses": gin.H{
+						"200": gin.H{"description": "Anthropic messages response"},
 						"401": gin.H{"description": "Unauthorized", "content": gin.H{"application/json": gin.H{"schema": gin.H{"$ref": "#/components/schemas/Error"}}}},
 						"403": gin.H{"description": "Model forbidden", "content": gin.H{"application/json": gin.H{"schema": gin.H{"$ref": "#/components/schemas/Error"}}}},
 						"429": gin.H{"description": "Quota or budget exceeded", "content": gin.H{"application/json": gin.H{"schema": gin.H{"$ref": "#/components/schemas/Error"}}}},
@@ -539,6 +576,17 @@ func (h *Handler) OpenAPI(c *gin.Context) {
 						"content":  gin.H{"application/json": gin.H{"schema": gin.H{"type": "object"}}},
 					},
 					"responses": gin.H{"200": gin.H{"description": "Debug embeddings response"}},
+				},
+			},
+			"/admin/debug/messages": gin.H{
+				"post": gin.H{
+					"summary":  "Run admin debug anthropic messages",
+					"security": []gin.H{{"adminAuth": []string{}}},
+					"requestBody": gin.H{
+						"required": true,
+						"content":  gin.H{"application/json": gin.H{"schema": gin.H{"type": "object"}}},
+					},
+					"responses": gin.H{"200": gin.H{"description": "Debug anthropic messages response"}},
 				},
 			},
 		},

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/crypto/bcrypt"
 
 	"wcstransfer/backend/internal/entity"
 )
@@ -150,9 +152,201 @@ RETURNING id, name, slug, provider_type, base_url, status, description, extra_co
 	return item, nil
 }
 
+func (s *Store) ListTenants(ctx context.Context) ([]entity.Tenant, error) {
+	const query = `
+SELECT id, name, slug, status, max_client_keys, wallet_balance::float8, notes, created_at, updated_at
+FROM tenants
+ORDER BY id DESC`
+
+	rows, err := s.pool.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("query tenants: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]entity.Tenant, 0)
+	for rows.Next() {
+		var item entity.Tenant
+		if err := rows.Scan(&item.ID, &item.Name, &item.Slug, &item.Status, &item.MaxClientKeys, &item.WalletBalance, &item.Notes, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan tenant: %w", err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate tenants: %w", err)
+	}
+	return items, nil
+}
+
+func (s *Store) UpdateTenant(ctx context.Context, input entity.UpdateTenantInput) (entity.Tenant, error) {
+	const query = `
+UPDATE tenants
+SET name = $2,
+    slug = $3,
+    status = $4,
+    max_client_keys = $5,
+    notes = $6
+WHERE id = $1
+RETURNING id, name, slug, status, max_client_keys, wallet_balance::float8, notes, created_at, updated_at`
+
+	var item entity.Tenant
+	err := s.pool.QueryRow(ctx, query, input.ID, input.Name, input.Slug, input.Status, input.MaxClientKeys, input.Notes).Scan(
+		&item.ID,
+		&item.Name,
+		&item.Slug,
+		&item.Status,
+		&item.MaxClientKeys,
+		&item.WalletBalance,
+		&item.Notes,
+		&item.CreatedAt,
+		&item.UpdatedAt,
+	)
+	if err != nil {
+		return entity.Tenant{}, fmt.Errorf("update tenant: %w", err)
+	}
+	return item, nil
+}
+
+func (s *Store) AdjustTenantWallet(ctx context.Context, input entity.TenantWalletAdjustmentInput) (entity.Tenant, error) {
+	if input.Amount <= 0 {
+		return entity.Tenant{}, fmt.Errorf("amount must be greater than 0")
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return entity.Tenant{}, fmt.Errorf("begin adjust tenant wallet tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var item entity.Tenant
+	var before float64
+	err = tx.QueryRow(ctx, `
+SELECT id, name, slug, status, max_client_keys, wallet_balance::float8, notes, created_at, updated_at
+FROM tenants
+WHERE id = $1
+FOR UPDATE`, input.TenantID).Scan(
+		&item.ID,
+		&item.Name,
+		&item.Slug,
+		&item.Status,
+		&item.MaxClientKeys,
+		&before,
+		&item.Notes,
+		&item.CreatedAt,
+		&item.UpdatedAt,
+	)
+	if err != nil {
+		return entity.Tenant{}, fmt.Errorf("load tenant wallet: %w", err)
+	}
+
+	after := before + input.Amount
+	err = tx.QueryRow(ctx, `
+UPDATE tenants
+SET wallet_balance = $2
+WHERE id = $1
+RETURNING id, name, slug, status, max_client_keys, wallet_balance::float8, notes, created_at, updated_at`,
+		input.TenantID,
+		after,
+	).Scan(
+		&item.ID,
+		&item.Name,
+		&item.Slug,
+		&item.Status,
+		&item.MaxClientKeys,
+		&item.WalletBalance,
+		&item.Notes,
+		&item.CreatedAt,
+		&item.UpdatedAt,
+	)
+	if err != nil {
+		return entity.Tenant{}, fmt.Errorf("update tenant wallet: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+INSERT INTO tenant_wallet_ledger (
+    tenant_id, direction, amount, balance_before, balance_after, note, operator_type, operator_user_id
+) VALUES ($1, 'credit', $2, $3, $4, $5, 'admin', NULLIF($6, 0))`,
+		input.TenantID,
+		input.Amount,
+		before,
+		after,
+		input.Note,
+		nullableInt64(input.OperatorID),
+	); err != nil {
+		return entity.Tenant{}, fmt.Errorf("insert tenant wallet ledger: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return entity.Tenant{}, fmt.Errorf("commit tenant wallet tx: %w", err)
+	}
+
+	return item, nil
+}
+
+func (s *Store) ListTenantWalletLedger(ctx context.Context, tenantID int64, page int, pageSize int) (entity.TenantWalletLedgerPage, error) {
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+
+	var total int64
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM tenant_wallet_ledger WHERE tenant_id = $1`, tenantID).Scan(&total); err != nil {
+		return entity.TenantWalletLedgerPage{}, fmt.Errorf("count tenant wallet ledger: %w", err)
+	}
+
+	rows, err := s.pool.Query(ctx, `
+SELECT id, tenant_id, direction, amount::float8, balance_before::float8, balance_after::float8,
+       note, operator_type, COALESCE(operator_user_id, 0), created_at
+FROM tenant_wallet_ledger
+WHERE tenant_id = $1
+ORDER BY created_at DESC, id DESC
+LIMIT $2 OFFSET $3`,
+		tenantID,
+		pageSize,
+		(page-1)*pageSize,
+	)
+	if err != nil {
+		return entity.TenantWalletLedgerPage{}, fmt.Errorf("query tenant wallet ledger: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]entity.TenantWalletLedgerEntry, 0)
+	for rows.Next() {
+		var item entity.TenantWalletLedgerEntry
+		if err := rows.Scan(
+			&item.ID,
+			&item.TenantID,
+			&item.Direction,
+			&item.Amount,
+			&item.BalanceBefore,
+			&item.BalanceAfter,
+			&item.Note,
+			&item.OperatorType,
+			&item.OperatorUserID,
+			&item.CreatedAt,
+		); err != nil {
+			return entity.TenantWalletLedgerPage{}, fmt.Errorf("scan tenant wallet ledger: %w", err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return entity.TenantWalletLedgerPage{}, fmt.Errorf("iterate tenant wallet ledger: %w", err)
+	}
+
+	return entity.TenantWalletLedgerPage{
+		Items:    items,
+		Total:    total,
+		Page:     page,
+		PageSize: pageSize,
+	}, nil
+}
+
 func (s *Store) ListClientAPIKeys(ctx context.Context) ([]entity.ClientAPIKey, error) {
 	const query = `
 SELECT cak.id, cak.name, cak.masked_key, cak.status, cak.description,
+       COALESCE(cak.tenant_id, 0), COALESCE(t.name, ''), COALESCE(t.wallet_balance, 0)::float8,
        cak.rpm_limit, cak.daily_request_limit, cak.daily_token_limit,
        cak.daily_cost_limit::float8, cak.monthly_cost_limit::float8, cak.warning_threshold::float8,
        COALESCE(model_access.allowed_model_ids, ARRAY[]::bigint[]),
@@ -161,6 +355,7 @@ SELECT cak.id, cak.name, cak.masked_key, cak.status, cak.description,
        COALESCE(monthly_usage.monthly_cost_used, 0)::float8,
        cak.expires_at, cak.last_used_at, cak.last_error_at, cak.last_error_message, cak.created_at, cak.updated_at
 FROM client_api_keys cak
+LEFT JOIN tenants t ON t.id = cak.tenant_id
 LEFT JOIN LATERAL (
     SELECT
         array_agg(cam.model_id ORDER BY cam.model_id) AS allowed_model_ids,
@@ -170,13 +365,13 @@ LEFT JOIN LATERAL (
     WHERE cam.client_api_key_id = cak.id
 ) model_access ON TRUE
 LEFT JOIN LATERAL (
-    SELECT COALESCE(SUM(estimated_cost), 0) AS daily_cost_used
+    SELECT COALESCE(SUM(billable_amount), 0) AS daily_cost_used
     FROM request_logs
     WHERE client_api_key_id = cak.id
       AND created_at >= date_trunc('day', NOW())
 ) daily_usage ON TRUE
 LEFT JOIN LATERAL (
-    SELECT COALESCE(SUM(estimated_cost), 0) AS monthly_cost_used
+    SELECT COALESCE(SUM(billable_amount), 0) AS monthly_cost_used
     FROM request_logs
     WHERE client_api_key_id = cak.id
       AND created_at >= date_trunc('month', NOW())
@@ -213,10 +408,10 @@ func (s *Store) CreateClientAPIKey(ctx context.Context, input entity.CreateClien
 
 	const query = `
 INSERT INTO client_api_keys (
-    name, key_hash, masked_key, status, description, rpm_limit, daily_request_limit, daily_token_limit,
+    tenant_id, created_by_user_id, name, key_hash, masked_key, status, description, rpm_limit, daily_request_limit, daily_token_limit,
     daily_cost_limit, monthly_cost_limit, warning_threshold, expires_at
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 RETURNING id`
 
 	tx, err := s.pool.Begin(ctx)
@@ -229,6 +424,8 @@ RETURNING id`
 	err = tx.QueryRow(
 		ctx,
 		query,
+		nullableInt64(input.TenantID),
+		nullableInt64(input.CreatedByUserID),
 		input.Name,
 		keyHash,
 		maskedKey,
@@ -266,15 +463,16 @@ func (s *Store) UpdateClientAPIKey(ctx context.Context, input entity.UpdateClien
 	const query = `
 UPDATE client_api_keys
 SET name = $2,
-    status = $3,
-    description = $4,
-    rpm_limit = $5,
-    daily_request_limit = $6,
-    daily_token_limit = $7,
-    daily_cost_limit = $8,
-    monthly_cost_limit = $9,
-    warning_threshold = $10,
-    expires_at = $11
+    tenant_id = COALESCE($3, tenant_id),
+    status = $4,
+    description = $5,
+    rpm_limit = $6,
+    daily_request_limit = $7,
+    daily_token_limit = $8,
+    daily_cost_limit = $9,
+    monthly_cost_limit = $10,
+    warning_threshold = $11,
+    expires_at = $12
 WHERE id = $1
 RETURNING id`
 
@@ -290,6 +488,7 @@ RETURNING id`
 		query,
 		input.ID,
 		input.Name,
+		nullableInt64(input.TenantID),
 		input.Status,
 		input.Description,
 		input.RPMLimit,
@@ -477,7 +676,7 @@ func (s *Store) ListModels(ctx context.Context) ([]entity.Model, error) {
 	const query = `
 SELECT m.id, m.public_name, m.provider_id, p.name, m.upstream_model, m.route_strategy, m.is_enabled,
        m.max_tokens, m.temperature::float8, m.timeout_seconds,
-       m.input_cost_per_1m::float8, m.output_cost_per_1m::float8,
+       m.cost_input_per_1m::float8, m.cost_output_per_1m::float8, m.sale_input_per_1m::float8, m.sale_output_per_1m::float8,
        m.metadata, m.created_at, m.updated_at
 FROM models m
 JOIN providers p ON p.id = m.provider_id
@@ -504,8 +703,10 @@ ORDER BY m.id DESC`
 			&item.MaxTokens,
 			&item.Temperature,
 			&item.TimeoutSeconds,
-			&item.InputCostPer1M,
-			&item.OutputCostPer1M,
+			&item.CostInputPer1M,
+			&item.CostOutputPer1M,
+			&item.SaleInputPer1M,
+			&item.SaleOutputPer1M,
 			&rawMetadata,
 			&item.CreatedAt,
 			&item.UpdatedAt,
@@ -527,11 +728,11 @@ func (s *Store) CreateModel(ctx context.Context, input entity.CreateModelInput) 
 	const query = `
 INSERT INTO models (
     public_name, provider_id, upstream_model, route_strategy, is_enabled, max_tokens,
-    temperature, timeout_seconds, input_cost_per_1m, output_cost_per_1m, metadata
+    temperature, timeout_seconds, cost_input_per_1m, cost_output_per_1m, sale_input_per_1m, sale_output_per_1m, metadata
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 RETURNING id, public_name, provider_id, upstream_model, route_strategy, is_enabled, max_tokens,
-          temperature::float8, timeout_seconds, input_cost_per_1m::float8, output_cost_per_1m::float8,
+          temperature::float8, timeout_seconds, cost_input_per_1m::float8, cost_output_per_1m::float8, sale_input_per_1m::float8, sale_output_per_1m::float8,
           metadata, created_at, updated_at`
 
 	var item entity.Model
@@ -547,8 +748,10 @@ RETURNING id, public_name, provider_id, upstream_model, route_strategy, is_enabl
 		input.MaxTokens,
 		input.Temperature,
 		input.TimeoutSeconds,
-		input.InputCostPer1M,
-		input.OutputCostPer1M,
+		input.CostInputPer1M,
+		input.CostOutputPer1M,
+		input.SaleInputPer1M,
+		input.SaleOutputPer1M,
 		normalizeJSON(input.Metadata),
 	).Scan(
 		&item.ID,
@@ -560,8 +763,10 @@ RETURNING id, public_name, provider_id, upstream_model, route_strategy, is_enabl
 		&item.MaxTokens,
 		&item.Temperature,
 		&item.TimeoutSeconds,
-		&item.InputCostPer1M,
-		&item.OutputCostPer1M,
+		&item.CostInputPer1M,
+		&item.CostOutputPer1M,
+		&item.SaleInputPer1M,
+		&item.SaleOutputPer1M,
 		&rawMetadata,
 		&item.CreatedAt,
 		&item.UpdatedAt,
@@ -591,12 +796,14 @@ SET public_name = $2,
     max_tokens = $7,
     temperature = $8,
     timeout_seconds = $9,
-    input_cost_per_1m = $10,
-    output_cost_per_1m = $11,
-    metadata = $12
+    cost_input_per_1m = $10,
+    cost_output_per_1m = $11,
+    sale_input_per_1m = $12,
+    sale_output_per_1m = $13,
+    metadata = $14
 WHERE id = $1
 RETURNING id, public_name, provider_id, upstream_model, route_strategy, is_enabled, max_tokens,
-          temperature::float8, timeout_seconds, input_cost_per_1m::float8, output_cost_per_1m::float8,
+          temperature::float8, timeout_seconds, cost_input_per_1m::float8, cost_output_per_1m::float8, sale_input_per_1m::float8, sale_output_per_1m::float8,
           metadata, created_at, updated_at`
 
 	var item entity.Model
@@ -613,8 +820,10 @@ RETURNING id, public_name, provider_id, upstream_model, route_strategy, is_enabl
 		input.MaxTokens,
 		input.Temperature,
 		input.TimeoutSeconds,
-		input.InputCostPer1M,
-		input.OutputCostPer1M,
+		input.CostInputPer1M,
+		input.CostOutputPer1M,
+		input.SaleInputPer1M,
+		input.SaleOutputPer1M,
 		normalizeJSON(input.Metadata),
 	).Scan(
 		&item.ID,
@@ -626,8 +835,10 @@ RETURNING id, public_name, provider_id, upstream_model, route_strategy, is_enabl
 		&item.MaxTokens,
 		&item.Temperature,
 		&item.TimeoutSeconds,
-		&item.InputCostPer1M,
-		&item.OutputCostPer1M,
+		&item.CostInputPer1M,
+		&item.CostOutputPer1M,
+		&item.SaleInputPer1M,
+		&item.SaleOutputPer1M,
 		&rawMetadata,
 		&item.CreatedAt,
 		&item.UpdatedAt,
@@ -650,7 +861,7 @@ func (s *Store) ListEnabledModels(ctx context.Context) ([]entity.Model, error) {
 	const query = `
 SELECT m.id, m.public_name, m.provider_id, p.name, m.upstream_model, m.route_strategy, m.is_enabled,
        m.max_tokens, m.temperature::float8, m.timeout_seconds,
-       m.input_cost_per_1m::float8, m.output_cost_per_1m::float8,
+       m.cost_input_per_1m::float8, m.cost_output_per_1m::float8, m.sale_input_per_1m::float8, m.sale_output_per_1m::float8,
        m.metadata, m.created_at, m.updated_at
 FROM models m
 JOIN providers p ON p.id = m.provider_id
@@ -678,8 +889,10 @@ ORDER BY m.public_name ASC`
 			&item.MaxTokens,
 			&item.Temperature,
 			&item.TimeoutSeconds,
-			&item.InputCostPer1M,
-			&item.OutputCostPer1M,
+			&item.CostInputPer1M,
+			&item.CostOutputPer1M,
+			&item.SaleInputPer1M,
+			&item.SaleOutputPer1M,
 			&rawMetadata,
 			&item.CreatedAt,
 			&item.UpdatedAt,
@@ -701,7 +914,7 @@ func (s *Store) ResolveModelRoute(ctx context.Context, publicName string) (entit
 	const modelQuery = `
 SELECT
 	m.id, m.public_name, m.provider_id, m.upstream_model, m.route_strategy, m.is_enabled,
-	m.max_tokens, m.temperature::float8, m.timeout_seconds, m.input_cost_per_1m::float8, m.output_cost_per_1m::float8,
+	m.max_tokens, m.temperature::float8, m.timeout_seconds, m.cost_input_per_1m::float8, m.cost_output_per_1m::float8, m.sale_input_per_1m::float8, m.sale_output_per_1m::float8,
     m.metadata, m.created_at, m.updated_at,
 	p.id, p.name, p.slug, p.provider_type, p.base_url, p.status, p.description, p.extra_config, p.created_at, p.updated_at
 FROM models m
@@ -724,8 +937,10 @@ LIMIT 1`
 		&route.Model.MaxTokens,
 		&route.Model.Temperature,
 		&route.Model.TimeoutSeconds,
-		&route.Model.InputCostPer1M,
-		&route.Model.OutputCostPer1M,
+		&route.Model.CostInputPer1M,
+		&route.Model.CostOutputPer1M,
+		&route.Model.SaleInputPer1M,
+		&route.Model.SaleOutputPer1M,
 		&modelMetadata,
 		&route.Model.CreatedAt,
 		&route.Model.UpdatedAt,
@@ -769,11 +984,12 @@ WITH updated_key AS (
     WHERE key_hash = $1
       AND status = 'active'
       AND (expires_at IS NULL OR expires_at > NOW())
-    RETURNING id, name, masked_key, status, description, rpm_limit, daily_request_limit, daily_token_limit,
+    RETURNING id, tenant_id, name, masked_key, status, description, rpm_limit, daily_request_limit, daily_token_limit,
               daily_cost_limit, monthly_cost_limit, warning_threshold,
               expires_at, last_used_at, last_error_at, last_error_message, created_at, updated_at
 )
 SELECT uk.id, uk.name, uk.masked_key, uk.status, uk.description,
+       COALESCE(uk.tenant_id, 0), COALESCE(t.name, ''), COALESCE(t.wallet_balance, 0)::float8,
        uk.rpm_limit, uk.daily_request_limit, uk.daily_token_limit,
        uk.daily_cost_limit::float8, uk.monthly_cost_limit::float8, uk.warning_threshold::float8,
        COALESCE(model_access.allowed_model_ids, ARRAY[]::bigint[]),
@@ -782,6 +998,7 @@ SELECT uk.id, uk.name, uk.masked_key, uk.status, uk.description,
        COALESCE(monthly_usage.monthly_cost_used, 0)::float8,
        uk.expires_at, uk.last_used_at, uk.last_error_at, uk.last_error_message, uk.created_at, uk.updated_at
 FROM updated_key uk
+LEFT JOIN tenants t ON t.id = uk.tenant_id
 LEFT JOIN LATERAL (
     SELECT
         array_agg(cam.model_id ORDER BY cam.model_id) AS allowed_model_ids,
@@ -791,42 +1008,476 @@ LEFT JOIN LATERAL (
     WHERE cam.client_api_key_id = uk.id
 ) model_access ON TRUE
 LEFT JOIN LATERAL (
-    SELECT COALESCE(SUM(estimated_cost), 0) AS daily_cost_used
+    SELECT COALESCE(SUM(billable_amount), 0) AS daily_cost_used
     FROM request_logs
     WHERE client_api_key_id = uk.id
       AND created_at >= date_trunc('day', NOW())
 ) daily_usage ON TRUE
 LEFT JOIN LATERAL (
-    SELECT COALESCE(SUM(estimated_cost), 0) AS monthly_cost_used
+    SELECT COALESCE(SUM(billable_amount), 0) AS monthly_cost_used
     FROM request_logs
     WHERE client_api_key_id = uk.id
       AND created_at >= date_trunc('month', NOW())
-) monthly_usage ON TRUE`
+) monthly_usage ON TRUE
+WHERE uk.tenant_id IS NULL OR t.status = 'active'`
 
-	var item entity.ClientAPIKey
-	err := s.pool.QueryRow(ctx, query, hashClientAPIKey(rawKey)).Scan(
-		&item.ID,
-		&item.Name,
-		&item.MaskedKey,
-		&item.Status,
-		&item.Description,
-		&item.RPMLimit,
-		&item.DailyRequestLimit,
-		&item.DailyTokenLimit,
-		&item.AllowedModelIDs,
-		&item.AllowedModels,
-		&item.ExpiresAt,
-		&item.LastUsedAt,
-		&item.LastErrorAt,
-		&item.LastErrorMessage,
-		&item.CreatedAt,
-		&item.UpdatedAt,
-	)
+	item, err := scanClientAPIKey(s.pool.QueryRow(ctx, query, hashClientAPIKey(rawKey)))
 	if err != nil {
 		return entity.ClientAPIKey{}, fmt.Errorf("authenticate client api key: %w", err)
 	}
 
 	return item, nil
+}
+
+func (s *Store) RegisterTenantUser(ctx context.Context, input entity.RegisterTenantUserInput) (entity.TenantUser, error) {
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(input.Password), bcrypt.DefaultCost)
+	if err != nil {
+		return entity.TenantUser{}, fmt.Errorf("hash tenant user password: %w", err)
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return entity.TenantUser{}, fmt.Errorf("begin register tenant user tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var tenantID int64
+	err = tx.QueryRow(
+		ctx,
+		`INSERT INTO tenants (name, slug, status, max_client_keys, notes) VALUES ($1, $2, 'pending', 0, '') RETURNING id`,
+		input.TenantName,
+		input.TenantSlug,
+	).Scan(&tenantID)
+	if err != nil {
+		return entity.TenantUser{}, fmt.Errorf("insert tenant: %w", err)
+	}
+
+	var user entity.TenantUser
+	err = tx.QueryRow(
+		ctx,
+		`INSERT INTO tenant_users (tenant_id, email, password_hash, full_name, status)
+		 VALUES ($1, $2, $3, $4, 'active')
+		 RETURNING id, tenant_id, email, full_name, status, last_login_at, created_at, updated_at`,
+		tenantID,
+		strings.ToLower(strings.TrimSpace(input.Email)),
+		string(passwordHash),
+		input.FullName,
+	).Scan(&user.ID, &user.TenantID, &user.Email, &user.FullName, &user.Status, &user.LastLoginAt, &user.CreatedAt, &user.UpdatedAt)
+	if err != nil {
+		return entity.TenantUser{}, fmt.Errorf("insert tenant user: %w", err)
+	}
+	user.TenantName = input.TenantName
+
+	if err := tx.Commit(ctx); err != nil {
+		return entity.TenantUser{}, fmt.Errorf("commit register tenant user tx: %w", err)
+	}
+
+	return user, nil
+}
+
+func (s *Store) AuthenticateTenantUser(ctx context.Context, email string, password string) (entity.TenantUser, error) {
+	const query = `
+SELECT tu.id, tu.tenant_id, t.name, tu.email, tu.full_name, tu.status, tu.password_hash, tu.last_login_at, tu.created_at, tu.updated_at
+FROM tenant_users tu
+JOIN tenants t ON t.id = tu.tenant_id
+WHERE tu.email = $1
+  AND tu.status = 'active'
+  AND t.status = 'active'`
+
+	var user entity.TenantUser
+	var passwordHash string
+	err := s.pool.QueryRow(ctx, query, strings.ToLower(strings.TrimSpace(email))).Scan(
+		&user.ID,
+		&user.TenantID,
+		&user.TenantName,
+		&user.Email,
+		&user.FullName,
+		&user.Status,
+		&passwordHash,
+		&user.LastLoginAt,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+	)
+	if err != nil {
+		return entity.TenantUser{}, fmt.Errorf("authenticate tenant user: %w", err)
+	}
+
+	if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(password)); err != nil {
+		return entity.TenantUser{}, pgx.ErrNoRows
+	}
+
+	return user, nil
+}
+
+func (s *Store) UpdateTenantUserLastLogin(ctx context.Context, userID int64) error {
+	if _, err := s.pool.Exec(ctx, `UPDATE tenant_users SET last_login_at = NOW() WHERE id = $1`, userID); err != nil {
+		return fmt.Errorf("update tenant user last login: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) GetTenantUserByID(ctx context.Context, userID int64) (entity.TenantUser, error) {
+	const query = `
+SELECT tu.id, tu.tenant_id, t.name, tu.email, tu.full_name, tu.status, tu.last_login_at, tu.created_at, tu.updated_at
+FROM tenant_users tu
+JOIN tenants t ON t.id = tu.tenant_id
+WHERE tu.id = $1
+  AND tu.status = 'active'
+  AND t.status = 'active'`
+
+	var user entity.TenantUser
+	err := s.pool.QueryRow(ctx, query, userID).Scan(
+		&user.ID,
+		&user.TenantID,
+		&user.TenantName,
+		&user.Email,
+		&user.FullName,
+		&user.Status,
+		&user.LastLoginAt,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+	)
+	if err != nil {
+		return entity.TenantUser{}, fmt.Errorf("get tenant user by id: %w", err)
+	}
+	return user, nil
+}
+
+func (s *Store) GetTenantByID(ctx context.Context, tenantID int64) (entity.Tenant, error) {
+	const query = `
+SELECT id, name, slug, status, max_client_keys, wallet_balance::float8, notes, created_at, updated_at
+FROM tenants
+WHERE id = $1`
+
+	var item entity.Tenant
+	err := s.pool.QueryRow(ctx, query, tenantID).Scan(
+		&item.ID,
+		&item.Name,
+		&item.Slug,
+		&item.Status,
+		&item.MaxClientKeys,
+		&item.WalletBalance,
+		&item.Notes,
+		&item.CreatedAt,
+		&item.UpdatedAt,
+	)
+	if err != nil {
+		return entity.Tenant{}, fmt.Errorf("get tenant by id: %w", err)
+	}
+	return item, nil
+}
+
+func (s *Store) ListTenantClientAPIKeys(ctx context.Context, tenantID int64) ([]entity.ClientAPIKey, error) {
+	const query = `
+SELECT cak.id, cak.name, cak.masked_key, cak.status, cak.description,
+       COALESCE(cak.tenant_id, 0), COALESCE(t.name, ''), COALESCE(t.wallet_balance, 0)::float8,
+       cak.rpm_limit, cak.daily_request_limit, cak.daily_token_limit,
+       cak.daily_cost_limit::float8, cak.monthly_cost_limit::float8, cak.warning_threshold::float8,
+       COALESCE(model_access.allowed_model_ids, ARRAY[]::bigint[]),
+       COALESCE(model_access.allowed_models, ARRAY[]::text[]),
+       COALESCE(daily_usage.daily_cost_used, 0)::float8,
+       COALESCE(monthly_usage.monthly_cost_used, 0)::float8,
+       cak.expires_at, cak.last_used_at, cak.last_error_at, cak.last_error_message, cak.created_at, cak.updated_at
+FROM client_api_keys cak
+JOIN tenants t ON t.id = cak.tenant_id
+LEFT JOIN LATERAL (
+    SELECT
+        array_agg(cam.model_id ORDER BY cam.model_id) AS allowed_model_ids,
+        array_agg(m.public_name ORDER BY m.public_name) AS allowed_models
+    FROM client_api_key_models cam
+    JOIN models m ON m.id = cam.model_id
+    WHERE cam.client_api_key_id = cak.id
+) model_access ON TRUE
+LEFT JOIN LATERAL (
+    SELECT COALESCE(SUM(billable_amount), 0) AS daily_cost_used
+    FROM request_logs
+    WHERE client_api_key_id = cak.id
+      AND created_at >= date_trunc('day', NOW())
+) daily_usage ON TRUE
+LEFT JOIN LATERAL (
+    SELECT COALESCE(SUM(billable_amount), 0) AS monthly_cost_used
+    FROM request_logs
+    WHERE client_api_key_id = cak.id
+      AND created_at >= date_trunc('month', NOW())
+) monthly_usage ON TRUE
+WHERE cak.tenant_id = $1
+ORDER BY cak.id DESC`
+
+	rows, err := s.pool.Query(ctx, query, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("query tenant client api keys: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]entity.ClientAPIKey, 0)
+	for rows.Next() {
+		item, err := scanClientAPIKey(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate tenant client api keys: %w", err)
+	}
+	return items, nil
+}
+
+func (s *Store) GetTenantPortalStats(ctx context.Context, tenantID int64) (entity.TenantPortalStats, error) {
+	const query = `
+WITH request_stats AS (
+    SELECT
+        COUNT(*)::bigint AS request_count,
+        COUNT(*) FILTER (WHERE rl.success)::bigint AS success_count,
+        COUNT(*) FILTER (WHERE NOT rl.success)::bigint AS failed_count,
+        COALESCE(AVG(rl.latency_ms), 0)::float8 AS average_latency_ms,
+        COALESCE(SUM(rl.prompt_tokens), 0)::bigint AS prompt_tokens,
+        COALESCE(SUM(rl.completion_tokens), 0)::bigint AS completion_tokens,
+        COALESCE(SUM(rl.total_tokens), 0)::bigint AS total_tokens,
+        COALESCE(SUM(rl.cost_amount), 0)::float8 AS cost_amount,
+        COALESCE(SUM(rl.billable_amount), 0)::float8 AS billable_amount
+    FROM request_logs rl
+    JOIN client_api_keys cak ON cak.id = rl.client_api_key_id
+    WHERE cak.tenant_id = $1
+),
+key_stats AS (
+    SELECT
+        COUNT(*)::bigint AS client_key_count,
+        COUNT(*) FILTER (WHERE status = 'active')::bigint AS active_client_keys
+    FROM client_api_keys
+    WHERE tenant_id = $1
+)
+SELECT
+    rs.request_count,
+    rs.success_count,
+    rs.failed_count,
+    rs.average_latency_ms,
+    rs.prompt_tokens,
+    rs.completion_tokens,
+    rs.total_tokens,
+    rs.cost_amount,
+    rs.billable_amount,
+    ks.client_key_count,
+    ks.active_client_keys
+FROM request_stats rs
+CROSS JOIN key_stats ks`
+
+	var stats entity.TenantPortalStats
+	if err := s.pool.QueryRow(ctx, query, tenantID).Scan(
+		&stats.RequestCount,
+		&stats.SuccessCount,
+		&stats.FailedCount,
+		&stats.AverageLatencyMS,
+		&stats.PromptTokens,
+		&stats.CompletionTokens,
+		&stats.TotalTokens,
+		&stats.CostAmount,
+		&stats.BillableAmount,
+		&stats.ClientKeyCount,
+		&stats.ActiveClientKeys,
+	); err != nil {
+		return entity.TenantPortalStats{}, fmt.Errorf("query tenant portal stats: %w", err)
+	}
+	if stats.RequestCount > 0 {
+		stats.SuccessRate = float64(stats.SuccessCount) * 100 / float64(stats.RequestCount)
+	}
+	return stats, nil
+}
+
+func (s *Store) ListTenantModels(ctx context.Context, tenantID int64) ([]entity.Model, error) {
+	const unrestrictedQuery = `
+SELECT EXISTS (
+    SELECT 1
+    FROM client_api_keys cak
+    WHERE cak.tenant_id = $1
+      AND cak.status = 'active'
+      AND NOT EXISTS (
+          SELECT 1
+          FROM client_api_key_models cam
+          WHERE cam.client_api_key_id = cak.id
+      )
+)`
+
+	var hasUnrestricted bool
+	if err := s.pool.QueryRow(ctx, unrestrictedQuery, tenantID).Scan(&hasUnrestricted); err != nil {
+		return nil, fmt.Errorf("check tenant unrestricted models: %w", err)
+	}
+
+	query := `
+SELECT m.id, m.public_name, m.provider_id, p.name, m.upstream_model, m.route_strategy, m.is_enabled,
+       m.max_tokens, m.temperature::float8, m.timeout_seconds,
+       m.cost_input_per_1m::float8, m.cost_output_per_1m::float8, m.sale_input_per_1m::float8, m.sale_output_per_1m::float8,
+       m.metadata, m.created_at, m.updated_at
+FROM models m
+JOIN providers p ON p.id = m.provider_id
+WHERE m.is_enabled = TRUE
+  AND p.status = 'active'`
+	args := []any{}
+
+	if !hasUnrestricted {
+		query += `
+  AND (
+      NOT EXISTS (
+          SELECT 1
+          FROM client_api_keys cak_exists
+          WHERE cak_exists.tenant_id = $1
+            AND cak_exists.status = 'active'
+      )
+      OR EXISTS (
+          SELECT 1
+          FROM client_api_keys cak
+          JOIN client_api_key_models cam ON cam.client_api_key_id = cak.id
+          WHERE cak.tenant_id = $1
+            AND cak.status = 'active'
+            AND cam.model_id = m.id
+      )
+  )`
+		args = append(args, tenantID)
+	}
+
+	query += `
+ORDER BY m.public_name ASC`
+
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query tenant models: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]entity.Model, 0)
+	for rows.Next() {
+		var item entity.Model
+		var rawMetadata []byte
+		if err := rows.Scan(
+			&item.ID,
+			&item.PublicName,
+			&item.ProviderID,
+			&item.ProviderName,
+			&item.UpstreamModel,
+			&item.RouteStrategy,
+			&item.IsEnabled,
+			&item.MaxTokens,
+			&item.Temperature,
+			&item.TimeoutSeconds,
+			&item.CostInputPer1M,
+			&item.CostOutputPer1M,
+			&item.SaleInputPer1M,
+			&item.SaleOutputPer1M,
+			&rawMetadata,
+			&item.CreatedAt,
+			&item.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan tenant model: %w", err)
+		}
+		item.Metadata = rawMetadata
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate tenant models: %w", err)
+	}
+
+	return items, nil
+}
+
+func (s *Store) ListTenantRequestLogs(ctx context.Context, tenantID int64, input entity.ListRequestLogsInput) (entity.RequestLogPage, error) {
+	input.TenantID = tenantID
+	return s.ListRequestLogs(ctx, input)
+}
+
+func (s *Store) GetTenantRequestLog(ctx context.Context, tenantID int64, id int64) (entity.RequestLogDetail, error) {
+	const query = `
+SELECT rl.id, rl.trace_id, rl.request_type, rl.model_public_name, rl.upstream_model,
+       COALESCE(rl.provider_id, 0), COALESCE(p.name, ''), COALESCE(rl.provider_key_id, 0), COALESCE(pk.name, ''),
+       COALESCE(rl.client_api_key_id, 0), COALESCE(cak.name, ''),
+       COALESCE(HOST(rl.client_ip), ''), rl.request_method, rl.request_path, rl.http_status, rl.success, rl.latency_ms,
+       rl.prompt_tokens, rl.completion_tokens, rl.total_tokens, rl.cost_amount::float8, rl.billable_amount::float8, rl.error_type, rl.error_message,
+       rl.created_at, rl.request_payload, rl.response_payload, rl.metadata
+FROM request_logs rl
+LEFT JOIN providers p ON p.id = rl.provider_id
+LEFT JOIN provider_keys pk ON pk.id = rl.provider_key_id
+LEFT JOIN client_api_keys cak ON cak.id = rl.client_api_key_id
+WHERE rl.id = $1
+  AND EXISTS (
+      SELECT 1
+      FROM client_api_keys cak_filter
+      WHERE cak_filter.id = rl.client_api_key_id
+        AND cak_filter.tenant_id = $2
+  )`
+
+	var item entity.RequestLogDetail
+	err := s.pool.QueryRow(ctx, query, id, tenantID).Scan(
+		&item.ID,
+		&item.TraceID,
+		&item.RequestType,
+		&item.ModelPublicName,
+		&item.UpstreamModel,
+		&item.ProviderID,
+		&item.ProviderName,
+		&item.ProviderKeyID,
+		&item.ProviderKeyName,
+		&item.ClientAPIKeyID,
+		&item.ClientAPIKeyName,
+		&item.ClientIP,
+		&item.RequestMethod,
+		&item.RequestPath,
+		&item.HTTPStatus,
+		&item.Success,
+		&item.LatencyMS,
+		&item.PromptTokens,
+		&item.CompletionTokens,
+		&item.TotalTokens,
+		&item.CostAmount,
+		&item.BillableAmount,
+		&item.ErrorType,
+		&item.ErrorMessage,
+		&item.CreatedAt,
+		&item.RequestPayload,
+		&item.ResponsePayload,
+		&item.Metadata,
+	)
+	if err != nil {
+		return entity.RequestLogDetail{}, fmt.Errorf("query tenant request log: %w", err)
+	}
+	return item, nil
+}
+
+func (s *Store) CreateTenantClientAPIKey(ctx context.Context, input entity.CreateClientAPIKeyInput) (entity.ClientAPIKey, error) {
+	tenant, err := s.GetTenantByID(ctx, input.TenantID)
+	if err != nil {
+		return entity.ClientAPIKey{}, err
+	}
+	if tenant.Status != "active" {
+		return entity.ClientAPIKey{}, fmt.Errorf("tenant is not active yet")
+	}
+	if tenant.MaxClientKeys <= 0 {
+		return entity.ClientAPIKey{}, fmt.Errorf("tenant is not allowed to create client keys yet")
+	}
+
+	var existingCount int
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM client_api_keys WHERE tenant_id = $1`, input.TenantID).Scan(&existingCount); err != nil {
+		return entity.ClientAPIKey{}, fmt.Errorf("count tenant client keys: %w", err)
+	}
+	if existingCount >= tenant.MaxClientKeys {
+		return entity.ClientAPIKey{}, fmt.Errorf("tenant client key limit reached")
+	}
+
+	return s.CreateClientAPIKey(ctx, input)
+}
+
+func (s *Store) DisableTenantClientAPIKey(ctx context.Context, tenantID int64, id int64) (entity.ClientAPIKey, error) {
+	const query = `
+UPDATE client_api_keys
+SET status = 'disabled'
+WHERE id = $1
+  AND tenant_id = $2
+RETURNING id`
+
+	var clientKeyID int64
+	if err := s.pool.QueryRow(ctx, query, id, tenantID).Scan(&clientKeyID); err != nil {
+		return entity.ClientAPIKey{}, fmt.Errorf("disable tenant client api key: %w", err)
+	}
+
+	return s.getClientAPIKeyByID(ctx, clientKeyID)
 }
 
 func (s *Store) ListRequestLogs(ctx context.Context, input entity.ListRequestLogsInput) (entity.RequestLogPage, error) {
@@ -853,7 +1504,7 @@ SELECT rl.id, rl.trace_id, rl.request_type, rl.model_public_name, rl.upstream_mo
        COALESCE(rl.provider_id, 0), COALESCE(p.name, ''), COALESCE(rl.provider_key_id, 0), COALESCE(pk.name, ''),
        COALESCE(rl.client_api_key_id, 0), COALESCE(cak.name, ''),
        COALESCE(HOST(rl.client_ip), ''), rl.request_method, rl.request_path, rl.http_status, rl.success, rl.latency_ms,
-       rl.prompt_tokens, rl.completion_tokens, rl.total_tokens, rl.estimated_cost::float8, rl.error_type, rl.error_message,
+       rl.prompt_tokens, rl.completion_tokens, rl.total_tokens, rl.cost_amount::float8, rl.billable_amount::float8, rl.error_type, rl.error_message,
        rl.created_at
 FROM request_logs rl
 LEFT JOIN providers p ON p.id = rl.provider_id
@@ -893,7 +1544,8 @@ LIMIT $` + strconv.Itoa(len(args)-1) + ` OFFSET $` + strconv.Itoa(len(args))
 			&item.PromptTokens,
 			&item.CompletionTokens,
 			&item.TotalTokens,
-			&item.EstimatedCost,
+			&item.CostAmount,
+			&item.BillableAmount,
 			&item.ErrorType,
 			&item.ErrorMessage,
 			&item.CreatedAt,
@@ -922,7 +1574,7 @@ SELECT rl.id, rl.trace_id, rl.request_type, rl.model_public_name, rl.upstream_mo
        COALESCE(rl.provider_id, 0), COALESCE(p.name, ''), COALESCE(rl.provider_key_id, 0), COALESCE(pk.name, ''),
        COALESCE(rl.client_api_key_id, 0), COALESCE(cak.name, ''),
        COALESCE(HOST(rl.client_ip), ''), rl.request_method, rl.request_path, rl.http_status, rl.success, rl.latency_ms,
-       rl.prompt_tokens, rl.completion_tokens, rl.total_tokens, rl.estimated_cost::float8, rl.error_type, rl.error_message,
+       rl.prompt_tokens, rl.completion_tokens, rl.total_tokens, rl.cost_amount::float8, rl.billable_amount::float8, rl.error_type, rl.error_message,
        rl.created_at
 FROM request_logs rl
 LEFT JOIN providers p ON p.id = rl.provider_id
@@ -947,7 +1599,7 @@ SELECT rl.id, rl.trace_id, rl.request_type, rl.model_public_name, rl.upstream_mo
        COALESCE(rl.provider_id, 0), COALESCE(p.name, ''), COALESCE(rl.provider_key_id, 0), COALESCE(pk.name, ''),
        COALESCE(rl.client_api_key_id, 0), COALESCE(cak.name, ''),
        COALESCE(HOST(rl.client_ip), ''), rl.request_method, rl.request_path, rl.http_status, rl.success, rl.latency_ms,
-       rl.prompt_tokens, rl.completion_tokens, rl.total_tokens, rl.estimated_cost::float8, rl.error_type, rl.error_message,
+       rl.prompt_tokens, rl.completion_tokens, rl.total_tokens, rl.cost_amount::float8, rl.billable_amount::float8, rl.error_type, rl.error_message,
        rl.created_at, rl.request_payload, rl.response_payload, rl.metadata
 FROM request_logs rl
 LEFT JOIN providers p ON p.id = rl.provider_id
@@ -977,7 +1629,8 @@ WHERE rl.id = $1`
 		&item.PromptTokens,
 		&item.CompletionTokens,
 		&item.TotalTokens,
-		&item.EstimatedCost,
+		&item.CostAmount,
+		&item.BillableAmount,
 		&item.ErrorType,
 		&item.ErrorMessage,
 		&item.CreatedAt,
@@ -1017,7 +1670,8 @@ request_stats AS (
         COALESCE(SUM(prompt_tokens), 0)::bigint AS prompt_tokens,
         COALESCE(SUM(completion_tokens), 0)::bigint AS completion_tokens,
         COALESCE(SUM(total_tokens), 0)::bigint AS total_tokens,
-        COALESCE(SUM(estimated_cost), 0)::float8 AS estimated_cost
+        COALESCE(SUM(cost_amount), 0)::float8 AS cost_amount,
+        COALESCE(SUM(billable_amount), 0)::float8 AS billable_amount
     FROM request_logs
     WHERE created_at >= NOW() - make_interval(hours => $1)
 )
@@ -1036,16 +1690,17 @@ SELECT
     rs.prompt_tokens,
     rs.completion_tokens,
     rs.total_tokens,
-    rs.estimated_cost
+    rs.cost_amount,
+    rs.billable_amount
 FROM resource_counts rc
 CROSS JOIN request_stats rs`
 
 	stats := entity.DashboardStats{
-		WindowHours:   windowHours,
-		TopModels:     make([]entity.ModelUsageStat, 0),
-		TopProviders:  make([]entity.ProviderUsageStat, 0),
-		TopClients:    make([]entity.ClientUsageStat, 0),
-		QuotaPressure: make([]entity.ClientQuotaPressure, 0),
+		WindowHours:    windowHours,
+		TopModels:      make([]entity.ModelUsageStat, 0),
+		TopProviders:   make([]entity.ProviderUsageStat, 0),
+		TopClients:     make([]entity.ClientUsageStat, 0),
+		QuotaPressure:  make([]entity.ClientQuotaPressure, 0),
 		BudgetPressure: make([]entity.ClientBudgetPressure, 0),
 	}
 	err := s.pool.QueryRow(ctx, summaryQuery, windowHours).Scan(
@@ -1063,7 +1718,8 @@ CROSS JOIN request_stats rs`
 		&stats.PromptTokens,
 		&stats.CompletionTokens,
 		&stats.TotalTokens,
-		&stats.EstimatedCost,
+		&stats.CostAmount,
+		&stats.BillableAmount,
 	)
 	if err != nil {
 		return entity.DashboardStats{}, fmt.Errorf("query dashboard stats summary: %w", err)
@@ -1152,7 +1808,7 @@ LIMIT 5`
 		return entity.DashboardStats{}, fmt.Errorf("iterate dashboard top providers: %w", err)
 	}
 
-const topClientsQuery = `
+	const topClientsQuery = `
 SELECT
     COALESCE(cak.id, 0) AS client_api_key_id,
     COALESCE(cak.name, 'Anonymous Client') AS client_api_key_name,
@@ -1161,12 +1817,13 @@ SELECT
     COUNT(*) FILTER (WHERE NOT rl.success)::bigint AS failed_count,
     COALESCE(AVG(rl.latency_ms), 0)::float8 AS average_latency_ms,
     COALESCE(SUM(rl.total_tokens), 0)::bigint AS total_tokens,
-    COALESCE(SUM(rl.estimated_cost), 0)::float8 AS estimated_cost
+    COALESCE(SUM(rl.cost_amount), 0)::float8 AS cost_amount,
+    COALESCE(SUM(rl.billable_amount), 0)::float8 AS billable_amount
 FROM request_logs rl
 LEFT JOIN client_api_keys cak ON cak.id = rl.client_api_key_id
 WHERE rl.created_at >= NOW() - make_interval(hours => $1)
 GROUP BY COALESCE(cak.id, 0), COALESCE(cak.name, 'Anonymous Client')
-ORDER BY estimated_cost DESC, request_count DESC, client_api_key_name ASC
+ORDER BY billable_amount DESC, request_count DESC, client_api_key_name ASC
 LIMIT 5`
 
 	clientRows, err := s.pool.Query(ctx, topClientsQuery, windowHours)
@@ -1185,7 +1842,8 @@ LIMIT 5`
 			&item.FailedCount,
 			&item.AverageLatencyMS,
 			&item.TotalTokens,
-			&item.EstimatedCost,
+			&item.CostAmount,
+			&item.BillableAmount,
 		); err != nil {
 			return entity.DashboardStats{}, fmt.Errorf("scan dashboard top client: %w", err)
 		}
@@ -1204,11 +1862,11 @@ func (s *Store) CreateRequestLog(ctx context.Context, input entity.CreateRequest
 INSERT INTO request_logs (
     trace_id, request_type, model_public_name, upstream_model, provider_id, provider_key_id, client_api_key_id,
     client_ip, request_method, request_path, http_status, success, latency_ms, prompt_tokens,
-    completion_tokens, total_tokens, estimated_cost, error_type, error_message, request_payload,
-    response_payload, metadata
+    completion_tokens, total_tokens, estimated_cost, cost_amount, billable_amount, error_type, error_message,
+    request_payload, response_payload, metadata
 ) VALUES (
     $1, $2, $3, $4, NULLIF($5, 0), NULLIF($6, 0), NULLIF($7, 0), NULLIF($8, '')::inet, $9, $10, $11, $12, $13,
-    $14, $15, $16, $17, $18, $19, $20, $21, $22
+    $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24
 )`
 
 	_, err := s.pool.Exec(
@@ -1230,7 +1888,9 @@ INSERT INTO request_logs (
 		input.PromptTokens,
 		input.CompletionTokens,
 		input.TotalTokens,
-		input.EstimatedCost,
+		input.BillableAmount,
+		input.CostAmount,
+		input.BillableAmount,
 		input.ErrorType,
 		input.ErrorMessage,
 		normalizeJSON(input.RequestPayload),
@@ -1239,6 +1899,61 @@ INSERT INTO request_logs (
 	)
 	if err != nil {
 		return fmt.Errorf("insert request log: %w", err)
+	}
+
+	return nil
+}
+
+func (s *Store) DeductTenantWalletUsage(ctx context.Context, clientAPIKeyID int64, amount float64, note string) error {
+	if clientAPIKeyID <= 0 || amount <= 0 {
+		return nil
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin deduct tenant wallet tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var tenantID int64
+	var before float64
+	err = tx.QueryRow(ctx, `
+SELECT t.id, t.wallet_balance::float8
+FROM client_api_keys cak
+JOIN tenants t ON t.id = cak.tenant_id
+WHERE cak.id = $1
+FOR UPDATE`, clientAPIKeyID).Scan(&tenantID, &before)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		return fmt.Errorf("load tenant wallet for debit: %w", err)
+	}
+
+	after := before - amount
+	if after < 0 {
+		after = 0
+	}
+
+	if _, err := tx.Exec(ctx, `UPDATE tenants SET wallet_balance = $2 WHERE id = $1`, tenantID, after); err != nil {
+		return fmt.Errorf("update tenant wallet debit: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+INSERT INTO tenant_wallet_ledger (
+    tenant_id, direction, amount, balance_before, balance_after, note, operator_type
+) VALUES ($1, 'debit', $2, $3, $4, $5, 'system')`,
+		tenantID,
+		amount,
+		before,
+		after,
+		note,
+	); err != nil {
+		return fmt.Errorf("insert debit wallet ledger: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit deduct tenant wallet tx: %w", err)
 	}
 
 	return nil
@@ -1282,6 +1997,13 @@ func maskClientKey(value string) string {
 	return trimmed[:12] + "..." + trimmed[len(trimmed)-4:]
 }
 
+func nullableInt64(value int64) any {
+	if value <= 0 {
+		return nil
+	}
+	return value
+}
+
 func scanClientAPIKey(scanner interface {
 	Scan(dest ...any) error
 }) (entity.ClientAPIKey, error) {
@@ -1294,6 +2016,9 @@ func scanClientAPIKey(scanner interface {
 		&item.MaskedKey,
 		&item.Status,
 		&item.Description,
+		&item.TenantID,
+		&item.TenantName,
+		&item.TenantWalletBalance,
 		&item.RPMLimit,
 		&item.DailyRequestLimit,
 		&item.DailyTokenLimit,
@@ -1321,6 +2046,7 @@ func scanClientAPIKey(scanner interface {
 func (s *Store) getClientAPIKeyByID(ctx context.Context, id int64) (entity.ClientAPIKey, error) {
 	const query = `
 SELECT cak.id, cak.name, cak.masked_key, cak.status, cak.description,
+       COALESCE(cak.tenant_id, 0), COALESCE(t.name, ''), COALESCE(t.wallet_balance, 0)::float8,
        cak.rpm_limit, cak.daily_request_limit, cak.daily_token_limit,
        cak.daily_cost_limit::float8, cak.monthly_cost_limit::float8, cak.warning_threshold::float8,
        COALESCE(model_access.allowed_model_ids, ARRAY[]::bigint[]),
@@ -1329,6 +2055,7 @@ SELECT cak.id, cak.name, cak.masked_key, cak.status, cak.description,
        COALESCE(monthly_usage.monthly_cost_used, 0)::float8,
        cak.expires_at, cak.last_used_at, cak.last_error_at, cak.last_error_message, cak.created_at, cak.updated_at
 FROM client_api_keys cak
+LEFT JOIN tenants t ON t.id = cak.tenant_id
 LEFT JOIN LATERAL (
     SELECT
         array_agg(cam.model_id ORDER BY cam.model_id) AS allowed_model_ids,
@@ -1338,13 +2065,13 @@ LEFT JOIN LATERAL (
     WHERE cam.client_api_key_id = cak.id
 ) model_access ON TRUE
 LEFT JOIN LATERAL (
-    SELECT COALESCE(SUM(estimated_cost), 0) AS daily_cost_used
+    SELECT COALESCE(SUM(billable_amount), 0) AS daily_cost_used
     FROM request_logs
     WHERE client_api_key_id = cak.id
       AND created_at >= date_trunc('day', NOW())
 ) daily_usage ON TRUE
 LEFT JOIN LATERAL (
-    SELECT COALESCE(SUM(estimated_cost), 0) AS monthly_cost_used
+    SELECT COALESCE(SUM(billable_amount), 0) AS monthly_cost_used
     FROM request_logs
 WHERE client_api_key_id = cak.id
       AND created_at >= date_trunc('month', NOW())
@@ -1506,7 +2233,7 @@ func maskAPIKey(value string) string {
 		return "****"
 	}
 
-	return trimmed[:4] + strings.Repeat("*", len(trimmed)-8) + trimmed[len(trimmed)-4:]
+	return trimmed[:4] + "***" + trimmed[len(trimmed)-4:]
 }
 
 func calculateSuccessRate(successCount int64, requestCount int64) float64 {
@@ -1525,6 +2252,9 @@ func buildRequestLogFilters(input entity.ListRequestLogsInput) (string, []any) {
 		return "$" + strconv.Itoa(len(args))
 	}
 
+	if input.TenantID > 0 {
+		clauses = append(clauses, "EXISTS (SELECT 1 FROM client_api_keys cak_filter WHERE cak_filter.id = rl.client_api_key_id AND cak_filter.tenant_id = "+nextArg(input.TenantID)+")")
+	}
 	if input.ProviderID > 0 {
 		clauses = append(clauses, "rl.provider_id = "+nextArg(input.ProviderID))
 	}
@@ -1579,7 +2309,8 @@ func scanRequestLogs(rows pgx.Rows) ([]entity.RequestLog, error) {
 			&item.PromptTokens,
 			&item.CompletionTokens,
 			&item.TotalTokens,
-			&item.EstimatedCost,
+			&item.CostAmount,
+			&item.BillableAmount,
 			&item.ErrorType,
 			&item.ErrorMessage,
 			&item.CreatedAt,

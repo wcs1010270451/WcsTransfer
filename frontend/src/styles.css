@@ -24,9 +24,29 @@ body {
   color: var(--text-main);
 }
 
+a {
+  color: inherit;
+}
+
 .app-shell {
   min-height: 100vh;
   background: transparent;
+}
+
+.landing-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.landing-inner {
+  width: 100%;
+  max-width: 1120px;
+}
+
+.landing-card {
+  height: 100%;
 }
 
 .app-sider.ant-layout-sider {

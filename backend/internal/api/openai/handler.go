@@ -60,7 +60,8 @@ type chatLogState struct {
 	promptTokens     int
 	completionTokens int
 	totalTokens      int
-	estimatedCost    float64
+	costAmount       float64
+	billableAmount   float64
 	errorType        string
 	errorMessage     string
 	requestPayload   json.RawMessage
@@ -361,8 +362,10 @@ func (h *Handler) handleChatCompletions(c *gin.Context, options chatCompletionOp
 	logState.metadata["provider_slug"] = route.Provider.Slug
 	logState.metadata["provider_type"] = route.Provider.ProviderType
 	logState.metadata["route_strategy"] = route.Model.RouteStrategy
-	logState.metadata["input_cost_per_1m"] = route.Model.InputCostPer1M
-	logState.metadata["output_cost_per_1m"] = route.Model.OutputCostPer1M
+	logState.metadata["cost_input_per_1m"] = route.Model.CostInputPer1M
+	logState.metadata["cost_output_per_1m"] = route.Model.CostOutputPer1M
+	logState.metadata["sale_input_per_1m"] = route.Model.SaleInputPer1M
+	logState.metadata["sale_output_per_1m"] = route.Model.SaleOutputPer1M
 
 	route, err = applyChatRouteOptions(route, options, logState.metadata)
 	if err != nil {
@@ -648,8 +651,10 @@ func (h *Handler) handleEmbeddings(c *gin.Context, options chatCompletionOptions
 	logState.metadata["provider_slug"] = route.Provider.Slug
 	logState.metadata["provider_type"] = route.Provider.ProviderType
 	logState.metadata["route_strategy"] = route.Model.RouteStrategy
-	logState.metadata["input_cost_per_1m"] = route.Model.InputCostPer1M
-	logState.metadata["output_cost_per_1m"] = route.Model.OutputCostPer1M
+	logState.metadata["cost_input_per_1m"] = route.Model.CostInputPer1M
+	logState.metadata["cost_output_per_1m"] = route.Model.CostOutputPer1M
+	logState.metadata["sale_input_per_1m"] = route.Model.SaleInputPer1M
+	logState.metadata["sale_output_per_1m"] = route.Model.SaleOutputPer1M
 
 	route, err = applyChatRouteOptions(route, options, logState.metadata)
 	if err != nil {
@@ -1081,13 +1086,18 @@ func (h *Handler) writeRequestLog(ctx context.Context, startedAt time.Time, stat
 		PromptTokens:     state.promptTokens,
 		CompletionTokens: state.completionTokens,
 		TotalTokens:      state.totalTokens,
-		EstimatedCost:    state.estimatedCost,
+		CostAmount:       state.costAmount,
+		BillableAmount:   state.billableAmount,
 		ErrorType:        state.errorType,
 		ErrorMessage:     state.errorMessage,
 		RequestPayload:   state.requestPayload,
 		ResponsePayload:  state.responsePayload,
 		Metadata:         metadataBytes,
 	})
+
+	if state.success && state.clientAPIKeyID > 0 && state.billableAmount > 0 {
+		_ = h.logWriter.DeductTenantWalletUsage(ctx, state.clientAPIKeyID, state.billableAmount, "request "+state.traceID)
+	}
 }
 
 func buildUpstreamURL(baseURL string, path string) string {
@@ -1100,8 +1110,41 @@ func buildUpstreamURL(baseURL string, path string) string {
 		return strings.TrimRight(baseURL, "/") + "/" + strings.TrimLeft(path, "/")
 	}
 
-	parsed.Path = strings.TrimRight(parsed.Path, "/") + "/" + strings.TrimLeft(path, "/")
+	baseSegments := splitPathSegments(parsed.Path)
+	pathSegments := splitPathSegments(path)
+	if len(pathSegments) == 0 {
+		return parsed.String()
+	}
+	if pathHasSuffix(baseSegments, pathSegments) {
+		return parsed.String()
+	}
+	if len(baseSegments) > 0 && len(pathSegments) > 0 && baseSegments[len(baseSegments)-1] == pathSegments[0] {
+		pathSegments = pathSegments[1:]
+	}
+	segments := append(append([]string{}, baseSegments...), pathSegments...)
+	parsed.Path = "/" + strings.Join(segments, "/")
 	return parsed.String()
+}
+
+func splitPathSegments(value string) []string {
+	trimmed := strings.Trim(strings.TrimSpace(value), "/")
+	if trimmed == "" {
+		return nil
+	}
+	return strings.Split(trimmed, "/")
+}
+
+func pathHasSuffix(baseSegments []string, suffixSegments []string) bool {
+	if len(suffixSegments) == 0 || len(baseSegments) < len(suffixSegments) {
+		return false
+	}
+	start := len(baseSegments) - len(suffixSegments)
+	for index := range suffixSegments {
+		if baseSegments[start+index] != suffixSegments[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func copyResponseHeaders(destination http.Header, source http.Header) {
@@ -1296,9 +1339,10 @@ func applyUsage(metadata map[string]any, state *chatLogState, responseBody []byt
 	state.promptTokens = intFromAny(usageRaw["prompt_tokens"])
 	state.completionTokens = intFromAny(usageRaw["completion_tokens"])
 	state.totalTokens = intFromAny(usageRaw["total_tokens"])
-	state.estimatedCost = estimatedCostForUsage(state.promptTokens, state.completionTokens, model)
+	state.costAmount, state.billableAmount = amountsForUsage(state.promptTokens, state.completionTokens, model)
 	metadata["has_usage"] = true
-	metadata["estimated_cost"] = state.estimatedCost
+	metadata["cost_amount"] = state.costAmount
+	metadata["billable_amount"] = state.billableAmount
 }
 
 func intFromAny(value any) int {
@@ -1359,10 +1403,12 @@ func clientKeyBudgetExceeded(clientKey entity.ClientAPIKey) (bool, string) {
 	return false, ""
 }
 
-func estimatedCostForUsage(promptTokens int, completionTokens int, model entity.Model) float64 {
+func amountsForUsage(promptTokens int, completionTokens int, model entity.Model) (float64, float64) {
 	if promptTokens <= 0 && completionTokens <= 0 {
-		return 0
+		return 0, 0
 	}
 
-	return (float64(promptTokens)*model.InputCostPer1M + float64(completionTokens)*model.OutputCostPer1M) / 1_000_000
+	costAmount := (float64(promptTokens)*model.CostInputPer1M + float64(completionTokens)*model.CostOutputPer1M) / 1_000_000
+	billableAmount := (float64(promptTokens)*model.SaleInputPer1M + float64(completionTokens)*model.SaleOutputPer1M) / 1_000_000
+	return costAmount, billableAmount
 }

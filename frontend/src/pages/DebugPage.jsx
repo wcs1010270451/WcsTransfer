@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+﻿import { useEffect, useRef, useState } from "react";
 import { App, Button, Card, Form, Input, InputNumber, Select, Space, Switch, Tag, Typography } from "antd";
 import { debugChatCompletion, debugChatCompletionStream, debugEmbeddings, fetchKeys, fetchModels } from "../api/client";
 import PageHeaderCard from "../components/PageHeaderCard";
 
 const routeStrategyOptions = [
-  { label: "Follow model strategy", value: "" },
+  { label: "跟随模型策略", value: "" },
   { label: "fixed", value: "fixed" },
   { label: "failover", value: "failover" },
   { label: "round_robin", value: "round_robin" },
@@ -40,7 +40,7 @@ export default function DebugPage() {
       setModels((modelsResponse.items || []).filter((item) => item.is_enabled));
       setKeys(keysResponse.items || []);
     } catch (error) {
-      message.error(error.response?.data?.error?.message || error.message || "Failed to load debug resources");
+      message.error(error.response?.data?.error?.message || error.message || "加载调试资源失败");
     } finally {
       setLoading(false);
     }
@@ -121,17 +121,17 @@ export default function DebugPage() {
       setStreamText(response.assistantText || "");
       setStreamRaw(response.rawText || "");
       setStreamUsage(response.usage || null);
-      message.success("Debug request completed");
+      message.success("调试请求已完成");
     } catch (error) {
       const response = error.response;
-      setResult(response?.data || { error: { message: error.message || "Request failed" } });
+      setResult(response?.data || { error: { message: error.message || "请求失败" } });
       setResultHeaders(response?.headers || {});
       setResultStatus(response?.status || 0);
       setStreamText("");
       setStreamRaw("");
       setStreamUsage(null);
       if (error.name !== "AbortError") {
-        message.error(response?.data?.error?.message || error.message || "Debug request failed");
+        message.error(response?.data?.error?.message || error.message || "调试请求失败");
       }
     } finally {
       abortRef.current = null;
@@ -143,7 +143,7 @@ export default function DebugPage() {
     abortRef.current?.abort();
     abortRef.current = null;
     setSubmitting(false);
-    message.info("Stream stopped");
+    message.info("已停止流式输出");
   };
 
   const assistantMessage =
@@ -156,15 +156,15 @@ export default function DebugPage() {
   return (
     <Space direction="vertical" size={24} style={{ width: "100%" }}>
       <PageHeaderCard
-        eyebrow="Debug"
-        title="Interactive routing debugger"
-        description="Pick a model, optionally force a specific key, and compare the gateway's current routing strategy against a manual override before you do broader pressure tests."
+        eyebrow="调试"
+        title="交互式路由调试器"
+        description="选择模型，可选强制指定某把上游密钥，并对比当前策略和手动覆盖策略的效果，便于压测前先确认路由行为。"
       />
 
       <section className="panel-card">
         <Form form={form} layout="vertical" onFinish={handleSubmit}>
           <Space direction="vertical" size={18} style={{ width: "100%" }}>
-            <Form.Item label="Model" name="model" rules={[{ required: true, message: "Select a model" }]}>
+            <Form.Item label="模型" name="model" rules={[{ required: true, message: "请选择模型" }]}>
               <Select
                 loading={loading}
                 options={models.map((item) => ({
@@ -175,57 +175,57 @@ export default function DebugPage() {
               />
             </Form.Item>
 
-            <Form.Item label="Request Type" name="request_type">
+            <Form.Item label="请求类型" name="request_type">
               <Select options={requestTypeOptions} />
             </Form.Item>
 
-            <Form.Item label="Provider Key" name="provider_key_id" extra="Leave empty to follow the model's current routing strategy. Choosing a key forces the request to that key.">
+            <Form.Item label="上游密钥" name="provider_key_id" extra="留空表示按模型当前策略自动选择。指定密钥后会强制走该密钥。">
               <Select
                 allowClear
-                placeholder={selectedModel ? "Auto select by strategy" : "Select a model first"}
+                placeholder={selectedModel ? "按策略自动选择" : "请先选择模型"}
                 disabled={!selectedModel}
                 options={availableKeys.map((item) => ({
-                  label: `${item.name} (${item.masked_api_key || "masked"})${item.health_status === "cooldown" ? " [cooldown]" : ""}`,
+                  label: `${item.name} (${item.masked_api_key || "已脱敏"})${item.health_status === "cooldown" ? " [冷却中]" : ""}`,
                   value: item.id,
                 }))}
               />
             </Form.Item>
 
-            <Form.Item label="Route Strategy Override" name="route_strategy" extra="Only used when no provider key is forced.">
+            <Form.Item label="路由策略覆盖" name="route_strategy" extra="仅在未强制指定上游密钥时生效。">
               <Select disabled={Boolean(selectedProviderKeyID)} options={routeStrategyOptions} />
             </Form.Item>
 
             <Form.Item label="System Prompt" name="system_prompt" hidden={requestType !== "chat"}>
-              <Input.TextArea rows={3} placeholder="Optional system instruction" />
+              <Input.TextArea rows={3} placeholder="可选的系统提示词" />
             </Form.Item>
 
-            <Form.Item label="Stream" name="stream" valuePropName="checked" hidden={requestType !== "chat"} extra="Turn this on to test real-time SSE forwarding from the gateway.">
+            <Form.Item label="流式返回" name="stream" valuePropName="checked" hidden={requestType !== "chat"} extra="开启后可测试网关的实时 SSE 转发能力。">
               <Switch />
             </Form.Item>
 
-            <Form.Item label="User Message" name="user_message" hidden={requestType !== "chat"} rules={requestType === "chat" ? [{ required: true, message: "Enter a user message" }] : []}>
-              <Input.TextArea rows={6} placeholder="Ask the model something to validate routing behavior" />
+            <Form.Item label="用户消息" name="user_message" hidden={requestType !== "chat"} rules={requestType === "chat" ? [{ required: true, message: "请输入用户消息" }] : []}>
+              <Input.TextArea rows={6} placeholder="输入一段内容，用来验证路由行为是否符合预期" />
             </Form.Item>
 
-            <Form.Item label="Embedding Input" name="embedding_input" hidden={requestType !== "embeddings"} rules={requestType === "embeddings" ? [{ required: true, message: "Enter embedding input" }] : []}>
-              <Input.TextArea rows={6} placeholder="Text to embed" />
+            <Form.Item label="Embedding 输入" name="embedding_input" hidden={requestType !== "embeddings"} rules={requestType === "embeddings" ? [{ required: true, message: "请输入向量化内容" }] : []}>
+              <Input.TextArea rows={6} placeholder="待向量化的文本" />
             </Form.Item>
 
             <Space size={16} wrap hidden={requestType !== "chat"}>
               <Form.Item label="Temperature" name="temperature" style={{ minWidth: 180 }}>
                 <InputNumber min={0} max={2} step={0.1} style={{ width: "100%" }} />
               </Form.Item>
-              <Form.Item label="Max Tokens" name="max_tokens" style={{ minWidth: 180 }}>
+              <Form.Item label="最大 Tokens" name="max_tokens" style={{ minWidth: 180 }}>
                 <InputNumber min={1} max={32768} style={{ width: "100%" }} />
               </Form.Item>
             </Space>
 
             <Space>
               <Button type="primary" htmlType="submit" loading={submitting}>
-                Send Debug Request
+                发送调试请求
               </Button>
               <Button danger onClick={stopStream} disabled={!submitting || !form.getFieldValue("stream") || requestType !== "chat"}>
-                Stop Stream
+                停止流式
               </Button>
               <Button
                 onClick={() => {
@@ -238,7 +238,7 @@ export default function DebugPage() {
                   setStreamUsage(null);
                 }}
               >
-                Reset
+                重置
               </Button>
             </Space>
           </Space>
@@ -247,35 +247,35 @@ export default function DebugPage() {
 
       <section className="panel-card">
         <Space direction="vertical" size={16} style={{ width: "100%" }}>
-          <div className="section-label">Resolved route</div>
+          <div className="section-label">最终路由结果</div>
           <Space wrap>
-            <Tag color="blue">status: {resultStatus ?? "-"}</Tag>
-            <Tag color="cyan">strategy: {resultHeaders["x-wcs-debug-route-strategy"] || "-"}</Tag>
-            <Tag color="green">key id: {resultHeaders["x-wcs-debug-provider-key-id"] || "-"}</Tag>
-            <Tag color="gold">key name: {resultHeaders["x-wcs-debug-provider-key-name"] || "-"}</Tag>
-            <Tag color="purple">retry: {resultHeaders["x-wcs-debug-retry-count"] || "0"}</Tag>
-            <Tag color="magenta">failover: {resultHeaders["x-wcs-debug-failover-count"] || "0"}</Tag>
+            <Tag color="blue">状态: {resultStatus ?? "-"}</Tag>
+            <Tag color="cyan">策略: {resultHeaders["x-wcs-debug-route-strategy"] || "-"}</Tag>
+            <Tag color="green">密钥 ID: {resultHeaders["x-wcs-debug-provider-key-id"] || "-"}</Tag>
+            <Tag color="gold">密钥名称: {resultHeaders["x-wcs-debug-provider-key-name"] || "-"}</Tag>
+            <Tag color="purple">重试: {resultHeaders["x-wcs-debug-retry-count"] || "0"}</Tag>
+            <Tag color="magenta">切换: {resultHeaders["x-wcs-debug-failover-count"] || "0"}</Tag>
           </Space>
 
-          <Card size="small" title="Assistant preview">
+          <Card size="small" title="响应预览">
             <Typography.Paragraph style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}>
               {requestType === "embeddings"
                 ? JSON.stringify(result?.data?.[0]?.embedding ? result.data[0].embedding.slice(0, 16) : result, null, 2)
-                : assistantMessage || "No response yet"}
+                : assistantMessage || "暂无响应"}
             </Typography.Paragraph>
           </Card>
 
           {streamUsage ? (
-            <Card size="small" title="Stream usage">
+            <Card size="small" title="流式用量">
               <Space wrap>
-                <Tag color="blue">prompt: {streamUsage.prompt_tokens ?? 0}</Tag>
-                <Tag color="green">completion: {streamUsage.completion_tokens ?? 0}</Tag>
-                <Tag color="purple">total: {streamUsage.total_tokens ?? 0}</Tag>
+                <Tag color="blue">输入: {streamUsage.prompt_tokens ?? 0}</Tag>
+                <Tag color="green">输出: {streamUsage.completion_tokens ?? 0}</Tag>
+                <Tag color="purple">总计: {streamUsage.total_tokens ?? 0}</Tag>
               </Space>
             </Card>
           ) : null}
 
-          <div className="section-label">Raw response</div>
+          <div className="section-label">原始响应</div>
           <pre className="json-preview">{form.getFieldValue("stream") ? streamRaw || JSON.stringify(result, null, 2) : JSON.stringify(result, null, 2)}</pre>
         </Space>
       </section>

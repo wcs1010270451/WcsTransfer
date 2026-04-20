@@ -14,6 +14,7 @@ type Config struct {
 	HTTPPort           string
 	GinMode            string
 	AdminToken         string
+	AuthTokenSecret    string
 	CORSAllowedOrigins []string
 	DatabaseURL        string
 	DatabaseMaxConns   int32
@@ -36,6 +37,7 @@ func Load() Config {
 		HTTPPort:   getEnv("HTTP_PORT", "8080"),
 		GinMode:    getEnv("GIN_MODE", defaultGinMode(env)),
 		AdminToken: getEnv("ADMIN_TOKEN", ""),
+		AuthTokenSecret: getEnv("AUTH_TOKEN_SECRET", getEnv("ADMIN_TOKEN", "dev-auth-secret")),
 		CORSAllowedOrigins: getCSVEnv("CORS_ALLOWED_ORIGINS", []string{
 			"http://localhost:3211",
 			"http://127.0.0.1:3211",

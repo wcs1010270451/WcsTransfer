@@ -48,6 +48,19 @@ type updateProviderRequest struct {
 	ExtraConfig  json.RawMessage `json:"extra_config"`
 }
 
+type updateTenantRequest struct {
+	Name          string `json:"name" binding:"required"`
+	Slug          string `json:"slug" binding:"required"`
+	Status        string `json:"status" binding:"required"`
+	MaxClientKeys int    `json:"max_client_keys"`
+	Notes         string `json:"notes"`
+}
+
+type adjustTenantWalletRequest struct {
+	Amount float64 `json:"amount" binding:"required"`
+	Note   string  `json:"note"`
+}
+
 type createClientAPIKeyRequest struct {
 	Name              string  `json:"name" binding:"required"`
 	Status            string  `json:"status"`
@@ -107,8 +120,10 @@ type createModelRequest struct {
 	MaxTokens       int             `json:"max_tokens"`
 	Temperature     float64         `json:"temperature"`
 	TimeoutSeconds  *int            `json:"timeout_seconds"`
-	InputCostPer1M  float64         `json:"input_cost_per_1m"`
-	OutputCostPer1M float64         `json:"output_cost_per_1m"`
+	CostInputPer1M  float64         `json:"cost_input_per_1m"`
+	CostOutputPer1M float64         `json:"cost_output_per_1m"`
+	SaleInputPer1M  float64         `json:"sale_input_per_1m"`
+	SaleOutputPer1M float64         `json:"sale_output_per_1m"`
 	Metadata        json.RawMessage `json:"metadata"`
 }
 
@@ -121,8 +136,10 @@ type updateModelRequest struct {
 	MaxTokens       int             `json:"max_tokens"`
 	Temperature     float64         `json:"temperature"`
 	TimeoutSeconds  *int            `json:"timeout_seconds"`
-	InputCostPer1M  float64         `json:"input_cost_per_1m"`
-	OutputCostPer1M float64         `json:"output_cost_per_1m"`
+	CostInputPer1M  float64         `json:"cost_input_per_1m"`
+	CostOutputPer1M float64         `json:"cost_output_per_1m"`
+	SaleInputPer1M  float64         `json:"sale_input_per_1m"`
+	SaleOutputPer1M float64         `json:"sale_output_per_1m"`
 	Metadata        json.RawMessage `json:"metadata"`
 }
 
@@ -146,6 +163,91 @@ func (h *Handler) ListProviders(c *gin.Context) {
 		"items": items,
 		"total": len(items),
 	})
+}
+
+func (h *Handler) ListTenants(c *gin.Context) {
+	if h.store == nil {
+		writeServiceUnavailable(c)
+		return
+	}
+
+	items, err := h.store.ListTenants(c.Request.Context())
+	if err != nil {
+		writeDatabaseError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"items": items,
+		"total": len(items),
+	})
+}
+
+func (h *Handler) UpdateTenant(c *gin.Context) {
+	if h.store == nil {
+		writeServiceUnavailable(c)
+		return
+	}
+
+	id, ok := parseResourceID(c)
+	if !ok {
+		return
+	}
+
+	var request updateTenantRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		writeBadRequest(c, "invalid request body")
+		return
+	}
+
+	item, err := h.store.UpdateTenant(c.Request.Context(), entity.UpdateTenantInput{
+		ID:            id,
+		Name:          strings.TrimSpace(request.Name),
+		Slug:          strings.TrimSpace(request.Slug),
+		Status:        strings.TrimSpace(request.Status),
+		MaxClientKeys: request.MaxClientKeys,
+		Notes:         strings.TrimSpace(request.Notes),
+	})
+	if err != nil {
+		writeDatabaseError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, item)
+}
+
+func (h *Handler) AdjustTenantWallet(c *gin.Context) {
+	if h.store == nil {
+		writeServiceUnavailable(c)
+		return
+	}
+
+	id, ok := parseResourceID(c)
+	if !ok {
+		return
+	}
+
+	var request adjustTenantWalletRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		writeBadRequest(c, "invalid request body")
+		return
+	}
+	if request.Amount <= 0 {
+		writeBadRequest(c, "amount must be greater than 0")
+		return
+	}
+
+	item, err := h.store.AdjustTenantWallet(c.Request.Context(), entity.TenantWalletAdjustmentInput{
+		TenantID: id,
+		Amount:   request.Amount,
+		Note:     strings.TrimSpace(request.Note),
+	})
+	if err != nil {
+		writeDatabaseError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, item)
 }
 
 func (h *Handler) CreateProvider(c *gin.Context) {
@@ -491,8 +593,10 @@ func (h *Handler) CreateModel(c *gin.Context) {
 		MaxTokens:       request.MaxTokens,
 		Temperature:     request.Temperature,
 		TimeoutSeconds:  defaultOptionalInt(request.TimeoutSeconds, 120),
-		InputCostPer1M:  request.InputCostPer1M,
-		OutputCostPer1M: request.OutputCostPer1M,
+		CostInputPer1M:  request.CostInputPer1M,
+		CostOutputPer1M: request.CostOutputPer1M,
+		SaleInputPer1M:  request.SaleInputPer1M,
+		SaleOutputPer1M: request.SaleOutputPer1M,
 		Metadata:        normalizeJSON(request.Metadata),
 	}
 
@@ -537,8 +641,10 @@ func (h *Handler) UpdateModel(c *gin.Context) {
 		MaxTokens:       request.MaxTokens,
 		Temperature:     request.Temperature,
 		TimeoutSeconds:  defaultOptionalInt(request.TimeoutSeconds, 120),
-		InputCostPer1M:  request.InputCostPer1M,
-		OutputCostPer1M: request.OutputCostPer1M,
+		CostInputPer1M:  request.CostInputPer1M,
+		CostOutputPer1M: request.CostOutputPer1M,
+		SaleInputPer1M:  request.SaleInputPer1M,
+		SaleOutputPer1M: request.SaleOutputPer1M,
 		Metadata:        normalizeJSON(request.Metadata),
 	}
 

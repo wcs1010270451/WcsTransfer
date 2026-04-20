@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { App, Button, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag } from "antd";
+import { useEffect, useMemo, useState } from "react";
+import { Alert, App, Button, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag, Typography } from "antd";
 import { createProvider, fetchProviders, updateProvider } from "../api/client";
 import PageHeaderCard from "../components/PageHeaderCard";
 
@@ -7,7 +7,6 @@ function parseJSONField(value, fallback = {}) {
   if (!value || !String(value).trim()) {
     return fallback;
   }
-
   return JSON.parse(value);
 }
 
@@ -15,7 +14,6 @@ function formatJSON(value) {
   if (!value) {
     return "{}";
   }
-
   try {
     return JSON.stringify(typeof value === "string" ? JSON.parse(value) : value, null, 2);
   } catch {
@@ -31,6 +29,38 @@ export default function ProvidersPage() {
   const [submitting, setSubmitting] = useState(false);
   const [editingProvider, setEditingProvider] = useState(null);
   const [form] = Form.useForm();
+  const providerType = Form.useWatch("provider_type", form);
+
+  const providerHints = useMemo(
+    () => ({
+      openai_compatible: {
+        baseURL: "https://api.openai.com/v1",
+        extraConfig: "{}",
+        note: "这里只填服务根路径，不要追加 /chat/completions 或 /embeddings。",
+      },
+      anthropic: {
+        baseURL: "https://api.anthropic.com",
+        extraConfig: JSON.stringify({ anthropic_version: "2023-06-01" }, null, 2),
+        note: "这里只填 API 主机地址，网关会自动追加 /v1/messages。",
+      },
+      openai: {
+        baseURL: "https://api.openai.com/v1",
+        extraConfig: "{}",
+        note: "这里只填 API 根路径，不要追加具体接口路径。",
+      },
+      azure_openai: {
+        baseURL: "https://your-resource.openai.azure.com/openai",
+        extraConfig: "{}",
+        note: "请确认 Azure 资源路径，这里不要追加 chat/completions。",
+      },
+      custom: {
+        baseURL: "https://api.example.com/v1",
+        extraConfig: "{}",
+        note: "这里只填服务根路径，网关会在需要时自动拼接接口路径。",
+      },
+    }),
+    [],
+  );
 
   const loadProviders = async () => {
     setLoading(true);
@@ -38,7 +68,7 @@ export default function ProvidersPage() {
       const response = await fetchProviders();
       setProviders(response.items || []);
     } catch (error) {
-      message.error(error.response?.data?.error?.message || error.message || "Failed to load providers");
+      message.error(error.response?.data?.error?.message || error.message || "加载提供方失败");
     } finally {
       setLoading(false);
     }
@@ -52,8 +82,9 @@ export default function ProvidersPage() {
     setEditingProvider(null);
     form.setFieldsValue({
       provider_type: "openai_compatible",
+      base_url: providerHints.openai_compatible.baseURL,
       status: "active",
-      extra_config: "{}",
+      extra_config: providerHints.openai_compatible.extraConfig,
     });
     setOpen(true);
   };
@@ -81,26 +112,49 @@ export default function ProvidersPage() {
   const handleSubmit = async (values) => {
     setSubmitting(true);
     try {
+      const normalizedBaseURL = String(values.base_url || "").trim();
+      if (
+        normalizedBaseURL.includes("/chat/completions") ||
+        normalizedBaseURL.includes("/embeddings") ||
+        normalizedBaseURL.includes("/messages")
+      ) {
+        message.error("Base URL 只能填写服务根路径，不能填写完整接口地址");
+        setSubmitting(false);
+        return;
+      }
+
       const payload = {
         ...values,
+        base_url: normalizedBaseURL,
         extra_config: parseJSONField(values.extra_config),
       };
 
       if (editingProvider) {
         await updateProvider(editingProvider.id, payload);
-        message.success("Provider updated");
+        message.success("提供方已更新");
       } else {
         await createProvider(payload);
-        message.success("Provider created");
+        message.success("提供方已创建");
       }
 
       closeModal();
       await loadProviders();
     } catch (error) {
-      message.error(error.response?.data?.error?.message || error.message || "Save failed");
+      message.error(error.response?.data?.error?.message || error.message || "保存失败");
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const handleProviderTypeChange = (value) => {
+    const hint = providerHints[value];
+    if (!hint || editingProvider) {
+      return;
+    }
+    form.setFieldsValue({
+      base_url: hint.baseURL,
+      extra_config: hint.extraConfig,
+    });
   };
 
   const handleToggleStatus = async (record) => {
@@ -114,22 +168,22 @@ export default function ProvidersPage() {
         description: record.description,
         extra_config: record.extra_config || {},
       });
-      message.success("Provider status updated");
+      message.success("提供方状态已更新");
       await loadProviders();
     } catch (error) {
-      message.error(error.response?.data?.error?.message || error.message || "Status update failed");
+      message.error(error.response?.data?.error?.message || error.message || "状态更新失败");
     }
   };
 
   return (
     <Space direction="vertical" size={24} style={{ width: "100%" }}>
       <PageHeaderCard
-        eyebrow="Provider Registry"
-        title="Manage upstream providers and compatibility endpoints"
-        description="Each provider represents one real upstream destination. Split regions, vendors, or compatibility layers into separate provider records so routing stays explicit."
+        eyebrow="提供方管理"
+        title="管理上游提供方和兼容接口"
+        description="每个提供方代表一个真实的上游目标。不同区域、厂商或兼容层建议拆成独立记录，方便后续路由和运维。"
         actions={
           <Button type="primary" onClick={openCreateModal}>
-            New Provider
+            新建提供方
           </Button>
         }
       />
@@ -141,29 +195,26 @@ export default function ProvidersPage() {
           dataSource={providers}
           pagination={false}
           columns={[
-            { title: "Name", dataIndex: "name", key: "name" },
+            { title: "名称", dataIndex: "name", key: "name" },
             { title: "Slug", dataIndex: "slug", key: "slug" },
-            { title: "Type", dataIndex: "provider_type", key: "provider_type" },
+            { title: "类型", dataIndex: "provider_type", key: "provider_type" },
             { title: "Base URL", dataIndex: "base_url", key: "base_url" },
             {
-              title: "Status",
+              title: "状态",
               dataIndex: "status",
               key: "status",
-              render: (value) => <Tag color={value === "active" ? "green" : "default"}>{value}</Tag>,
+              render: (value) => <Tag color={value === "active" ? "green" : "default"}>{value === "active" ? "启用" : "停用"}</Tag>,
             },
             {
-              title: "Actions",
+              title: "操作",
               key: "actions",
               render: (_, record) => (
                 <Space>
                   <Button size="small" onClick={() => openEditModal(record)}>
-                    Edit
+                    编辑
                   </Button>
-                  <Popconfirm
-                    title={record.status === "active" ? "Disable this provider?" : "Activate this provider?"}
-                    onConfirm={() => handleToggleStatus(record)}
-                  >
-                    <Button size="small">{record.status === "active" ? "Disable" : "Activate"}</Button>
+                  <Popconfirm title={record.status === "active" ? "确定停用这个提供方吗？" : "确定启用这个提供方吗？"} onConfirm={() => handleToggleStatus(record)}>
+                    <Button size="small">{record.status === "active" ? "停用" : "启用"}</Button>
                   </Popconfirm>
                 </Space>
               ),
@@ -172,43 +223,73 @@ export default function ProvidersPage() {
         />
       </section>
 
-      <Modal
-        open={open}
-        title={editingProvider ? "Edit Provider" : "New Provider"}
-        onCancel={closeModal}
-        onOk={() => form.submit()}
-        okButtonProps={{ loading: submitting }}
-        destroyOnClose
-      >
+      <Modal open={open} title={editingProvider ? "编辑提供方" : "新建提供方"} onCancel={closeModal} onOk={() => form.submit()} okButtonProps={{ loading: submitting }} destroyOnClose>
         <Form form={form} layout="vertical" onFinish={handleSubmit} initialValues={{ provider_type: "openai_compatible", status: "active" }}>
-          <Form.Item label="Name" name="name" rules={[{ required: true }]}>
+          {providerType ? (
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 16 }}
+              message={`推荐 Base URL：${providerHints[providerType]?.baseURL || "-"}`}
+              description={providerHints[providerType]?.note || "请使用提供方根地址。"}
+            />
+          ) : null}
+          <Form.Item label="名称" name="name" rules={[{ required: true }]}>
             <Input />
           </Form.Item>
           <Form.Item label="Slug" name="slug" rules={[{ required: true }]}>
             <Input />
           </Form.Item>
-          <Form.Item label="Type" name="provider_type">
+          <Form.Item label="类型" name="provider_type">
             <Select
+              onChange={handleProviderTypeChange}
               options={[
-                { label: "OpenAI Compatible", value: "openai_compatible" },
+                { label: "OpenAI 兼容", value: "openai_compatible" },
+                { label: "Anthropic", value: "anthropic" },
                 { label: "OpenAI", value: "openai" },
                 { label: "Azure OpenAI", value: "azure_openai" },
-                { label: "Custom", value: "custom" },
+                { label: "自定义", value: "custom" },
               ]}
             />
           </Form.Item>
-          <Form.Item label="Base URL" name="base_url" rules={[{ required: true }]}>
+          <Form.Item
+            label="Base URL"
+            name="base_url"
+            rules={[
+              { required: true },
+              {
+                validator: async (_, value) => {
+                  const normalized = String(value || "").trim();
+                  if (
+                    normalized.includes("/chat/completions") ||
+                    normalized.includes("/embeddings") ||
+                    normalized.includes("/messages")
+                  ) {
+                    throw new Error("这里只能填写提供方根地址，不能粘贴完整接口路径。");
+                  }
+                },
+              },
+            ]}
+            extra={providerType === "anthropic" ? "Anthropic 示例：https://api.anthropic.com" : "OpenAI 兼容示例：https://api.openai.com/v1"}
+          >
             <Input placeholder="https://api.example.com/v1" />
           </Form.Item>
-          <Form.Item label="Status" name="status">
-            <Select options={[{ label: "active", value: "active" }, { label: "disabled", value: "disabled" }]} />
+          <Form.Item label="状态" name="status">
+            <Select options={[{ label: "启用", value: "active" }, { label: "停用", value: "disabled" }]} />
           </Form.Item>
-          <Form.Item label="Description" name="description">
+          <Form.Item label="描述" name="description">
             <Input.TextArea rows={3} />
           </Form.Item>
-          <Form.Item label="Extra Config JSON" name="extra_config">
+          <Form.Item label="附加配置 JSON" name="extra_config">
             <Input.TextArea rows={4} placeholder='{"region":"cn"}' />
           </Form.Item>
+          {providerType === "anthropic" ? (
+            <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
+              Anthropic 附加配置支持 `anthropic_version` 和可选的 `anthropic_beta`。
+              <br />
+              <code>{`{"anthropic_version":"2023-06-01","anthropic_beta":["prompt-caching-2024-07-31"]}`}</code>
+            </Typography.Paragraph>
+          ) : null}
         </Form>
       </Modal>
     </Space>

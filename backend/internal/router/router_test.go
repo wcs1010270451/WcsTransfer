@@ -17,6 +17,7 @@ import (
 
 type stubStore struct {
 	providers    []entity.Provider
+	tenants      []entity.Tenant
 	clientKeys   []entity.ClientAPIKey
 	providerKeys []entity.ProviderKey
 	models       []entity.Model
@@ -61,6 +62,37 @@ func (s *stubStore) UpdateProvider(_ context.Context, input entity.UpdateProvide
 	}
 
 	return entity.Provider{}, context.Canceled
+}
+
+func (s *stubStore) ListTenants(context.Context) ([]entity.Tenant, error) {
+	return s.tenants, nil
+}
+
+func (s *stubStore) UpdateTenant(_ context.Context, input entity.UpdateTenantInput) (entity.Tenant, error) {
+	for index, item := range s.tenants {
+		if item.ID == input.ID {
+			item.Name = input.Name
+			item.Slug = input.Slug
+			item.Status = input.Status
+			item.MaxClientKeys = input.MaxClientKeys
+			item.Notes = input.Notes
+			s.tenants[index] = item
+			return item, nil
+		}
+	}
+
+	return entity.Tenant{}, context.Canceled
+}
+
+func (s *stubStore) AdjustTenantWallet(_ context.Context, input entity.TenantWalletAdjustmentInput) (entity.Tenant, error) {
+	for index, item := range s.tenants {
+		if item.ID == input.TenantID {
+			item.WalletBalance += input.Amount
+			s.tenants[index] = item
+			return item, nil
+		}
+	}
+	return entity.Tenant{}, context.Canceled
 }
 
 func (s *stubStore) ListClientAPIKeys(context.Context) ([]entity.ClientAPIKey, error) {
@@ -170,8 +202,10 @@ func (s *stubStore) CreateModel(_ context.Context, input entity.CreateModelInput
 		MaxTokens:       input.MaxTokens,
 		Temperature:     input.Temperature,
 		TimeoutSeconds:  input.TimeoutSeconds,
-		InputCostPer1M:  input.InputCostPer1M,
-		OutputCostPer1M: input.OutputCostPer1M,
+		CostInputPer1M:  input.CostInputPer1M,
+		CostOutputPer1M: input.CostOutputPer1M,
+		SaleInputPer1M:  input.SaleInputPer1M,
+		SaleOutputPer1M: input.SaleOutputPer1M,
 		Metadata:        input.Metadata,
 	}
 	s.models = append(s.models, item)
@@ -190,8 +224,10 @@ func (s *stubStore) UpdateModel(_ context.Context, input entity.UpdateModelInput
 			item.MaxTokens = input.MaxTokens
 			item.Temperature = input.Temperature
 			item.TimeoutSeconds = input.TimeoutSeconds
-			item.InputCostPer1M = input.InputCostPer1M
-			item.OutputCostPer1M = input.OutputCostPer1M
+			item.CostInputPer1M = input.CostInputPer1M
+			item.CostOutputPer1M = input.CostOutputPer1M
+			item.SaleInputPer1M = input.SaleInputPer1M
+			item.SaleOutputPer1M = input.SaleOutputPer1M
 			item.Metadata = input.Metadata
 			s.models[index] = item
 			return item, nil
@@ -252,6 +288,67 @@ func (s *stubStore) AuthenticateClientAPIKey(_ context.Context, rawKey string) (
 	}
 
 	return entity.ClientAPIKey{}, context.Canceled
+}
+
+func (s *stubStore) RegisterTenantUser(_ context.Context, input entity.RegisterTenantUserInput) (entity.TenantUser, error) {
+	tenant := entity.Tenant{
+		ID:            int64(len(s.tenants) + 1),
+		Name:          input.TenantName,
+		Slug:          input.TenantSlug,
+		Status:        "pending",
+		MaxClientKeys: 0,
+	}
+	s.tenants = append(s.tenants, tenant)
+	return entity.TenantUser{
+		ID:         int64(len(s.clientKeys) + len(s.tenants)),
+		TenantID:   tenant.ID,
+		TenantName: tenant.Name,
+		Email:      input.Email,
+		FullName:   input.FullName,
+		Status:     "active",
+	}, nil
+}
+
+func (s *stubStore) AuthenticateTenantUser(_ context.Context, email string, _ string) (entity.TenantUser, error) {
+	trimmed := strings.TrimSpace(email)
+	for _, tenant := range s.tenants {
+		return entity.TenantUser{
+			ID:         1,
+			TenantID:   tenant.ID,
+			TenantName: tenant.Name,
+			Email:      trimmed,
+			FullName:   "Stub User",
+			Status:     "active",
+		}, nil
+	}
+	return entity.TenantUser{}, context.Canceled
+}
+
+func (s *stubStore) UpdateTenantUserLastLogin(_ context.Context, _ int64) error {
+	return nil
+}
+
+func (s *stubStore) GetTenantUserByID(_ context.Context, userID int64) (entity.TenantUser, error) {
+	if len(s.tenants) == 0 {
+		return entity.TenantUser{}, context.Canceled
+	}
+	return entity.TenantUser{
+		ID:         userID,
+		TenantID:   s.tenants[0].ID,
+		TenantName: s.tenants[0].Name,
+		Email:      "stub@example.com",
+		FullName:   "Stub User",
+		Status:     "active",
+	}, nil
+}
+
+func (s *stubStore) GetTenantByID(_ context.Context, tenantID int64) (entity.Tenant, error) {
+	for _, item := range s.tenants {
+		if item.ID == tenantID {
+			return item, nil
+		}
+	}
+	return entity.Tenant{}, context.Canceled
 }
 
 func (s *stubStore) ListRequestLogs(_ context.Context, input entity.ListRequestLogsInput) (entity.RequestLogPage, error) {
@@ -339,8 +436,47 @@ func (s *stubStore) CreateRequestLog(_ context.Context, input entity.CreateReque
 	return nil
 }
 
+func (s *stubStore) DeductTenantWalletUsage(_ context.Context, clientAPIKeyID int64, amount float64, _ string) error {
+	for index, item := range s.clientKeys {
+		if item.ID == clientAPIKeyID {
+			item.TenantWalletBalance -= amount
+			if item.TenantWalletBalance < 0 {
+				item.TenantWalletBalance = 0
+			}
+			s.clientKeys[index] = item
+			return nil
+		}
+	}
+	return nil
+}
+
 func (s *stubStore) GetDashboardStats(context.Context) (entity.DashboardStats, error) {
 	return s.dashboard, nil
+}
+
+func (s *stubStore) ListTenantClientAPIKeys(_ context.Context, tenantID int64) ([]entity.ClientAPIKey, error) {
+	items := make([]entity.ClientAPIKey, 0)
+	for _, item := range s.clientKeys {
+		if item.TenantID == tenantID {
+			items = append(items, item)
+		}
+	}
+	return items, nil
+}
+
+func (s *stubStore) CreateTenantClientAPIKey(_ context.Context, input entity.CreateClientAPIKeyInput) (entity.ClientAPIKey, error) {
+	return s.CreateClientAPIKey(context.Background(), input)
+}
+
+func (s *stubStore) DisableTenantClientAPIKey(_ context.Context, tenantID int64, id int64) (entity.ClientAPIKey, error) {
+	for index, item := range s.clientKeys {
+		if item.ID == id && item.TenantID == tenantID {
+			item.Status = "disabled"
+			s.clientKeys[index] = item
+			return item, nil
+		}
+	}
+	return entity.ClientAPIKey{}, context.Canceled
 }
 
 func TestPublicRoutes(t *testing.T) {
@@ -1011,7 +1147,7 @@ func TestChatCompletionsProxyRoute(t *testing.T) {
 	}
 }
 
-func TestChatCompletionsLogsEstimatedCost(t *testing.T) {
+func TestChatCompletionsLogsAmounts(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -1043,8 +1179,10 @@ func TestChatCompletionsLogsEstimatedCost(t *testing.T) {
 				RouteStrategy:   "fixed",
 				IsEnabled:       true,
 				TimeoutSeconds:  30,
-				InputCostPer1M:  0.15,
-				OutputCostPer1M: 0.60,
+				CostInputPer1M:  0.15,
+				CostOutputPer1M: 0.60,
+				SaleInputPer1M:  0.30,
+				SaleOutputPer1M: 1.20,
 			},
 		},
 	}
@@ -1082,8 +1220,11 @@ func TestChatCompletionsLogsEstimatedCost(t *testing.T) {
 	if len(store.createdLogs) != 1 {
 		t.Fatalf("expected 1 created log, got %d", len(store.createdLogs))
 	}
-	if store.createdLogs[0].EstimatedCost <= 0 {
-		t.Fatalf("expected positive estimated cost, got %+v", store.createdLogs[0])
+	if store.createdLogs[0].CostAmount <= 0 {
+		t.Fatalf("expected positive cost amount, got %+v", store.createdLogs[0])
+	}
+	if store.createdLogs[0].BillableAmount <= 0 {
+		t.Fatalf("expected positive billable amount, got %+v", store.createdLogs[0])
 	}
 }
 
@@ -1132,8 +1273,10 @@ func TestEmbeddingsProxyRoute(t *testing.T) {
 				RouteStrategy:   "fixed",
 				IsEnabled:       true,
 				TimeoutSeconds:  30,
-				InputCostPer1M:  0.02,
-				OutputCostPer1M: 0,
+				CostInputPer1M:  0.02,
+				CostOutputPer1M: 0,
+				SaleInputPer1M:  0.02,
+				SaleOutputPer1M: 0,
 			},
 		},
 	}
@@ -1280,9 +1423,11 @@ func TestChatCompletionsStreamProxyRoute(t *testing.T) {
 }
 
 type stubStoreWithUpstream struct {
-	base     *stubStore
-	upstream string
-	keys     []entity.ProviderKey
+	base         *stubStore
+	upstream     string
+	keys         []entity.ProviderKey
+	providerType string
+	extraConfig  json.RawMessage
 }
 
 func (s *stubStoreWithUpstream) ListProviders(ctx context.Context) ([]entity.Provider, error) {
@@ -1295,6 +1440,18 @@ func (s *stubStoreWithUpstream) CreateProvider(ctx context.Context, input entity
 
 func (s *stubStoreWithUpstream) UpdateProvider(ctx context.Context, input entity.UpdateProviderInput) (entity.Provider, error) {
 	return s.base.UpdateProvider(ctx, input)
+}
+
+func (s *stubStoreWithUpstream) ListTenants(ctx context.Context) ([]entity.Tenant, error) {
+	return s.base.ListTenants(ctx)
+}
+
+func (s *stubStoreWithUpstream) UpdateTenant(ctx context.Context, input entity.UpdateTenantInput) (entity.Tenant, error) {
+	return s.base.UpdateTenant(ctx, input)
+}
+
+func (s *stubStoreWithUpstream) AdjustTenantWallet(ctx context.Context, input entity.TenantWalletAdjustmentInput) (entity.Tenant, error) {
+	return s.base.AdjustTenantWallet(ctx, input)
 }
 
 func (s *stubStoreWithUpstream) ListClientAPIKeys(ctx context.Context) ([]entity.ClientAPIKey, error) {
@@ -1358,10 +1515,12 @@ func (s *stubStoreWithUpstream) ResolveModelRoute(_ context.Context, publicName 
 			return entity.ModelRoute{
 				Model: item,
 				Provider: entity.Provider{
-					ID:      item.ProviderID,
-					Name:    item.ProviderName,
-					BaseURL: s.upstream,
-					Status:  "active",
+					ID:           item.ProviderID,
+					Name:         item.ProviderName,
+					BaseURL:      s.upstream,
+					Status:       "active",
+					ProviderType: defaultTestProviderType(s.providerType),
+					ExtraConfig:  s.extraConfig,
 				},
 				Keys: keys,
 			}, nil
@@ -1373,6 +1532,26 @@ func (s *stubStoreWithUpstream) ResolveModelRoute(_ context.Context, publicName 
 
 func (s *stubStoreWithUpstream) AuthenticateClientAPIKey(ctx context.Context, rawKey string) (entity.ClientAPIKey, error) {
 	return s.base.AuthenticateClientAPIKey(ctx, rawKey)
+}
+
+func (s *stubStoreWithUpstream) RegisterTenantUser(ctx context.Context, input entity.RegisterTenantUserInput) (entity.TenantUser, error) {
+	return s.base.RegisterTenantUser(ctx, input)
+}
+
+func (s *stubStoreWithUpstream) AuthenticateTenantUser(ctx context.Context, email string, password string) (entity.TenantUser, error) {
+	return s.base.AuthenticateTenantUser(ctx, email, password)
+}
+
+func (s *stubStoreWithUpstream) UpdateTenantUserLastLogin(ctx context.Context, userID int64) error {
+	return s.base.UpdateTenantUserLastLogin(ctx, userID)
+}
+
+func (s *stubStoreWithUpstream) GetTenantUserByID(ctx context.Context, userID int64) (entity.TenantUser, error) {
+	return s.base.GetTenantUserByID(ctx, userID)
+}
+
+func (s *stubStoreWithUpstream) GetTenantByID(ctx context.Context, tenantID int64) (entity.Tenant, error) {
+	return s.base.GetTenantByID(ctx, tenantID)
 }
 
 func (s *stubStoreWithUpstream) ListRequestLogs(ctx context.Context, input entity.ListRequestLogsInput) (entity.RequestLogPage, error) {
@@ -1391,8 +1570,232 @@ func (s *stubStoreWithUpstream) CreateRequestLog(ctx context.Context, input enti
 	return s.base.CreateRequestLog(ctx, input)
 }
 
+func (s *stubStoreWithUpstream) DeductTenantWalletUsage(ctx context.Context, clientAPIKeyID int64, amount float64, note string) error {
+	return s.base.DeductTenantWalletUsage(ctx, clientAPIKeyID, amount, note)
+}
+
 func (s *stubStoreWithUpstream) GetDashboardStats(ctx context.Context) (entity.DashboardStats, error) {
 	return s.base.GetDashboardStats(ctx)
+}
+
+func (s *stubStoreWithUpstream) ListTenantClientAPIKeys(ctx context.Context, tenantID int64) ([]entity.ClientAPIKey, error) {
+	return s.base.ListTenantClientAPIKeys(ctx, tenantID)
+}
+
+func (s *stubStoreWithUpstream) CreateTenantClientAPIKey(ctx context.Context, input entity.CreateClientAPIKeyInput) (entity.ClientAPIKey, error) {
+	return s.base.CreateTenantClientAPIKey(ctx, input)
+}
+
+func (s *stubStoreWithUpstream) DisableTenantClientAPIKey(ctx context.Context, tenantID int64, id int64) (entity.ClientAPIKey, error) {
+	return s.base.DisableTenantClientAPIKey(ctx, tenantID, id)
+}
+
+func defaultTestProviderType(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "openai_compatible"
+	}
+	return strings.TrimSpace(value)
+}
+
+func TestAnthropicMessagesProxyRoute(t *testing.T) {
+	upstreamCalled := false
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalled = true
+		if r.URL.Path != "/v1/messages" {
+			t.Fatalf("unexpected upstream path: %s", r.URL.Path)
+		}
+		if got := r.Header.Get("x-api-key"); got != "sk-test-secret" {
+			t.Fatalf("unexpected x-api-key header: %s", got)
+		}
+		if got := r.Header.Get("anthropic-version"); got != "2023-06-01" {
+			t.Fatalf("unexpected anthropic-version header: %s", got)
+		}
+
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode upstream body: %v", err)
+		}
+		if got := payload["model"]; got != "claude-sonnet-upstream" {
+			t.Fatalf("unexpected upstream model: %v", got)
+		}
+		if got := int(payload["max_tokens"].(float64)); got != 512 {
+			t.Fatalf("unexpected max_tokens: %d", got)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id":    "msg_123",
+			"type":  "message",
+			"role":  "assistant",
+			"model": "claude-sonnet-upstream",
+			"content": []map[string]any{
+				{"type": "text", "text": "Hello from Claude"},
+			},
+			"usage": map[string]any{
+				"input_tokens":  45,
+				"output_tokens": 67,
+			},
+		})
+	}))
+	defer upstream.Close()
+
+	cfg := config.Config{AppName: "wcstransfer-gateway", Env: "test", GinMode: "test", HTTPPort: "8080"}
+	store := &stubStore{
+		models: []entity.Model{
+			{
+				ID:              1,
+				PublicName:      "claude-sonnet-4",
+				ProviderID:      1,
+				ProviderName:    "anthropic",
+				UpstreamModel:   "claude-sonnet-upstream",
+				RouteStrategy:   "fixed",
+				IsEnabled:       true,
+				TimeoutSeconds:  30,
+				MaxTokens:       512,
+				CostInputPer1M:  3,
+				CostOutputPer1M: 15,
+				SaleInputPer1M:  3,
+				SaleOutputPer1M: 15,
+			},
+		},
+		clientKeys: []entity.ClientAPIKey{
+			{ID: 7, Name: "integration-client", PlainAPIKey: "wcs_live_proxy_test", Status: "active"},
+		},
+	}
+	routeStore := &stubStoreWithUpstream{
+		base:         store,
+		upstream:     upstream.URL,
+		providerType: "anthropic",
+	}
+	engine := New(cfg, &platform.Dependencies{}, &Stores{
+		Admin:  routeStore,
+		Auth:   routeStore,
+		Log:    routeStore,
+		Public: routeStore,
+	})
+
+	body, err := json.Marshal(map[string]any{
+		"model": "claude-sonnet-4",
+		"messages": []map[string]any{
+			{"role": "user", "content": "hello"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	request.Header.Set("Authorization", "Bearer wcs_live_proxy_test")
+	request.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, recorder.Code, recorder.Body.String())
+	}
+	if !upstreamCalled {
+		t.Fatalf("expected upstream server to be called")
+	}
+	if len(store.createdLogs) != 1 {
+		t.Fatalf("expected 1 created log, got %d", len(store.createdLogs))
+	}
+	if store.createdLogs[0].RequestType != "messages" {
+		t.Fatalf("unexpected log request type: %+v", store.createdLogs[0])
+	}
+	if store.createdLogs[0].PromptTokens != 45 || store.createdLogs[0].CompletionTokens != 67 || store.createdLogs[0].TotalTokens != 112 {
+		t.Fatalf("unexpected usage logged: %+v", store.createdLogs[0])
+	}
+}
+
+func TestAnthropicMessagesStreamProxyRoute(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+
+		flusher, _ := w.(http.Flusher)
+		_, _ = w.Write([]byte("event: message_start\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"usage\":{\"input_tokens\":21}}}\n\n"))
+		if flusher != nil {
+			flusher.Flush()
+		}
+		_, _ = w.Write([]byte("event: content_block_delta\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello\"}}\n\n"))
+		if flusher != nil {
+			flusher.Flush()
+		}
+		_, _ = w.Write([]byte("event: message_delta\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":34}}\n\n"))
+		if flusher != nil {
+			flusher.Flush()
+		}
+		_, _ = w.Write([]byte("event: message_stop\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"message_stop\"}\n\n"))
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}))
+	defer upstream.Close()
+
+	cfg := config.Config{AppName: "wcstransfer-gateway", Env: "test", GinMode: "test", HTTPPort: "8080"}
+	store := &stubStore{
+		models: []entity.Model{
+			{
+				ID:              1,
+				PublicName:      "claude-sonnet-4",
+				ProviderID:      1,
+				ProviderName:    "anthropic",
+				UpstreamModel:   "claude-sonnet-upstream",
+				RouteStrategy:   "fixed",
+				IsEnabled:       true,
+				TimeoutSeconds:  30,
+				MaxTokens:       512,
+				CostInputPer1M:  3,
+				CostOutputPer1M: 15,
+				SaleInputPer1M:  3,
+				SaleOutputPer1M: 15,
+			},
+		},
+	}
+	routeStore := &stubStoreWithUpstream{
+		base:         store,
+		upstream:     upstream.URL,
+		providerType: "anthropic",
+	}
+	engine := New(cfg, &platform.Dependencies{}, &Stores{
+		Admin:  routeStore,
+		Log:    routeStore,
+		Public: routeStore,
+	})
+
+	body, err := json.Marshal(map[string]any{
+		"model":      "claude-sonnet-4",
+		"max_tokens": 128,
+		"stream":     true,
+		"messages": []map[string]any{
+			{"role": "user", "content": "hello"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
+	}
+	if !strings.Contains(recorder.Body.String(), "\"type\":\"message_delta\"") {
+		t.Fatalf("expected anthropic stream body, got %s", recorder.Body.String())
+	}
+	if len(store.createdLogs) != 1 {
+		t.Fatalf("expected 1 created log, got %d", len(store.createdLogs))
+	}
+	if store.createdLogs[0].PromptTokens != 21 || store.createdLogs[0].CompletionTokens != 34 || store.createdLogs[0].TotalTokens != 55 {
+		t.Fatalf("unexpected stream usage logged: %+v", store.createdLogs[0])
+	}
 }
 
 func TestChatCompletionsFailoverToNextKey(t *testing.T) {

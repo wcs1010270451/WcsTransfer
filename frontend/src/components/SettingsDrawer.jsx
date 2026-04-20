@@ -15,36 +15,16 @@ export default function SettingsDrawer({ open, onClose }) {
   };
 
   return (
-    <Drawer
-      title="连接设置"
-      placement="right"
-      width={420}
-      open={open}
-      onClose={onClose}
-      destroyOnClose
-    >
+    <Drawer title="连接设置" placement="right" width={420} open={open} onClose={onClose} destroyOnClose>
       <Typography.Paragraph type="secondary">
-        管理令牌只保存在当前浏览器会话中，不会被打包进前端静态资源。
+        管理员令牌只会保存在当前浏览器会话中，不会打包进前端静态资源。
       </Typography.Paragraph>
-      <Form
-        layout="vertical"
-        form={form}
-        initialValues={{ apiBaseUrl, adminToken }}
-        onFinish={handleFinish}
-      >
-        <Form.Item
-          label="API Base URL"
-          name="apiBaseUrl"
-          rules={[{ required: true, message: "请输入后端地址" }]}
-        >
-          <Input placeholder="http://localhost:8080" />
+      <Form layout="vertical" form={form} initialValues={{ apiBaseUrl, adminToken }} onFinish={handleFinish}>
+        <Form.Item label="后端地址" name="apiBaseUrl" rules={[{ required: true, message: "请输入后端地址" }]}>
+          <Input placeholder="http://localhost:3210" />
         </Form.Item>
-        <Form.Item
-          label="Admin Token"
-          name="adminToken"
-          rules={[{ required: true, message: "请输入后台令牌" }]}
-        >
-          <Input.Password placeholder="Paste admin bearer token" />
+        <Form.Item label="管理员令牌" name="adminToken" rules={[{ required: true, message: "请输入管理员令牌" }]}>
+          <Input.Password placeholder="粘贴管理员 Bearer Token" />
         </Form.Item>
         <Space>
           <Button onClick={onClose}>取消</Button>

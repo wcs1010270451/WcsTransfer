@@ -15,6 +15,8 @@ services:
       - ./backend/migrations/0003_client_key_quotas.up.sql:/docker-entrypoint-initdb.d/0003_client_key_quotas.sql:ro
       - ./backend/migrations/0004_client_key_model_access.up.sql:/docker-entrypoint-initdb.d/0004_client_key_model_access.sql:ro
       - ./backend/migrations/0005_model_pricing_and_client_budgets.up.sql:/docker-entrypoint-initdb.d/0005_model_pricing_and_client_budgets.sql:ro
+      - ./backend/migrations/0006_add_anthropic_provider_type.up.sql:/docker-entrypoint-initdb.d/0006_add_anthropic_provider_type.sql:ro
+      - ./backend/migrations/0007_tenants_and_tenant_users.up.sql:/docker-entrypoint-initdb.d/0007_tenants_and_tenant_users.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U wcstransfer -d wcstransfer"]
       interval: 5s
@@ -48,6 +50,7 @@ services:
       HTTP_PORT: 8080
       GIN_MODE: debug
       ADMIN_TOKEN: change-me
+      AUTH_TOKEN_SECRET: change-me-portal-secret
       DATABASE_URL: postgres://wcstransfer:wcstransfer@postgres:5432/wcstransfer?sslmode=disable
       DATABASE_MAX_CONNS: 20
       DATABASE_MIN_CONNS: 2

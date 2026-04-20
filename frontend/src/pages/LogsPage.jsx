@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import {
   App,
   Button,
@@ -45,7 +45,7 @@ export default function LogsPage() {
       setProviders(providersResponse.items || []);
       setModels(modelsResponse.items || []);
     } catch (error) {
-      message.error(error.response?.data?.error?.message || error.message || "Failed to load filter options");
+      message.error(error.response?.data?.error?.message || error.message || "加载筛选项失败");
     }
   };
 
@@ -72,7 +72,7 @@ export default function LogsPage() {
         total: response.total || 0,
       });
     } catch (error) {
-      message.error(error.response?.data?.error?.message || error.message || "Failed to load logs");
+      message.error(error.response?.data?.error?.message || error.message || "加载日志失败");
     } finally {
       setLoading(false);
     }
@@ -116,9 +116,9 @@ export default function LogsPage() {
       link.click();
       link.remove();
       window.URL.revokeObjectURL(url);
-      message.success("CSV export started");
+      message.success("CSV 导出已开始");
     } catch (error) {
-      message.error(error.response?.data?.error?.message || error.message || "Failed to export logs");
+      message.error(error.response?.data?.error?.message || error.message || "导出日志失败");
     }
   };
 
@@ -133,7 +133,7 @@ export default function LogsPage() {
       const detail = await fetchLogDetail(record.id);
       setSelectedLog(detail);
     } catch (error) {
-      message.error(error.response?.data?.error?.message || error.message || "Failed to load log detail");
+      message.error(error.response?.data?.error?.message || error.message || "加载日志详情失败");
       setDetailOpen(false);
     } finally {
       setDetailLoading(false);
@@ -143,15 +143,15 @@ export default function LogsPage() {
   return (
     <Space direction="vertical" size={24} style={{ width: "100%" }}>
       <PageHeaderCard
-        eyebrow="Observability"
-        title="Search logs, narrow failures, and inspect request details"
-        description="This page is now a real troubleshooting entry point. Filter by provider, model, status, trace id, and HTTP code, then open any row to inspect the captured payload summary."
+        eyebrow="可观测性"
+        title="检索日志、缩小故障范围并查看请求详情"
+        description="这里是实际排障入口。可以按提供方、模型、状态、Trace ID 和 HTTP 状态码筛选，再打开单条日志查看请求和响应摘要。"
         actions={
           <Space>
-            <Button onClick={handleExport}>Export CSV</Button>
-            <Button onClick={handleReset}>Reset</Button>
+            <Button onClick={handleExport}>导出 CSV</Button>
+            <Button onClick={handleReset}>重置</Button>
             <Button type="primary" onClick={handleSearch}>
-              Search
+              查询
             </Button>
           </Space>
         }
@@ -160,28 +160,28 @@ export default function LogsPage() {
       <section className="panel-card">
         <Form form={form} layout="vertical">
           <Space wrap size={16} style={{ width: "100%" }}>
-            <Form.Item label="Provider" name="provider_id" style={{ minWidth: 180, marginBottom: 0 }}>
-              <Select allowClear options={providerOptions} placeholder="All providers" />
+            <Form.Item label="提供方" name="provider_id" style={{ minWidth: 180, marginBottom: 0 }}>
+              <Select allowClear options={providerOptions} placeholder="全部提供方" />
             </Form.Item>
-            <Form.Item label="Model" name="model_public_name" style={{ minWidth: 180, marginBottom: 0 }}>
-              <Select allowClear options={modelOptions} placeholder="All models" />
+            <Form.Item label="模型" name="model_public_name" style={{ minWidth: 180, marginBottom: 0 }}>
+              <Select allowClear options={modelOptions} placeholder="全部模型" />
             </Form.Item>
-            <Form.Item label="Status" name="success" style={{ minWidth: 140, marginBottom: 0 }}>
+            <Form.Item label="状态" name="success" style={{ minWidth: 140, marginBottom: 0 }}>
               <Select
                 options={[
-                  { label: "All", value: "all" },
-                  { label: "Success", value: true },
-                  { label: "Failed", value: false },
+                  { label: "全部", value: "all" },
+                  { label: "成功", value: true },
+                  { label: "失败", value: false },
                 ]}
               />
             </Form.Item>
-            <Form.Item label="HTTP Status" name="http_status" style={{ width: 140, marginBottom: 0 }}>
+            <Form.Item label="HTTP 状态码" name="http_status" style={{ width: 140, marginBottom: 0 }}>
               <InputNumber min={0} style={{ width: "100%" }} />
             </Form.Item>
             <Form.Item label="Trace ID" name="trace_id" style={{ minWidth: 220, marginBottom: 0 }}>
-              <Input placeholder="partial trace id" />
+              <Input placeholder="支持模糊匹配" />
             </Form.Item>
-            <Form.Item label="Created At" name="created_at" style={{ minWidth: 320, marginBottom: 0 }}>
+            <Form.Item label="创建时间" name="created_at" style={{ minWidth: 320, marginBottom: 0 }}>
               <DatePicker.RangePicker showTime style={{ width: "100%" }} />
             </Form.Item>
           </Space>
@@ -204,35 +204,35 @@ export default function LogsPage() {
           onChange={handleTableChange}
           columns={[
             { title: "Trace ID", dataIndex: "trace_id", key: "trace_id", width: 220, ellipsis: true },
-            { title: "Client", dataIndex: "client_api_key_name", key: "client_api_key_name", width: 160 },
-            { title: "Provider", dataIndex: "provider_name", key: "provider_name", width: 140 },
-            { title: "Key", dataIndex: "provider_key_name", key: "provider_key_name", width: 140 },
-            { title: "Model", dataIndex: "model_public_name", key: "model_public_name", width: 160 },
-            { title: "Request Type", dataIndex: "request_type", key: "request_type", width: 150 },
+            { title: "客户端", dataIndex: "client_api_key_name", key: "client_api_key_name", width: 160 },
+            { title: "提供方", dataIndex: "provider_name", key: "provider_name", width: 140 },
+            { title: "密钥", dataIndex: "provider_key_name", key: "provider_key_name", width: 140 },
+            { title: "模型", dataIndex: "model_public_name", key: "model_public_name", width: 160 },
+            { title: "请求类型", dataIndex: "request_type", key: "request_type", width: 150 },
             {
-              title: "Status",
+              title: "状态",
               dataIndex: "success",
               key: "success",
               width: 110,
-              render: (value) => <Tag color={value ? "green" : "red"}>{value ? "success" : "failed"}</Tag>,
+              render: (value) => <Tag color={value ? "green" : "red"}>{value ? "成功" : "失败"}</Tag>,
             },
             { title: "HTTP", dataIndex: "http_status", key: "http_status", width: 90 },
-            { title: "Latency", dataIndex: "latency_ms", key: "latency_ms", width: 100, render: (value) => `${value} ms` },
+            { title: "延迟", dataIndex: "latency_ms", key: "latency_ms", width: 100, render: (value) => `${value} ms` },
             { title: "Tokens", dataIndex: "total_tokens", key: "total_tokens", width: 100 },
             {
-              title: "Created At",
+              title: "创建时间",
               dataIndex: "created_at",
               key: "created_at",
               width: 180,
               render: (value) => (value ? new Date(value).toLocaleString() : "-"),
             },
             {
-              title: "Actions",
+              title: "操作",
               key: "actions",
               width: 100,
               render: (_, record) => (
                 <Button size="small" onClick={() => openDetail(record)}>
-                  Detail
+                  详情
                 </Button>
               ),
             },
@@ -243,49 +243,49 @@ export default function LogsPage() {
       <Drawer
         open={detailOpen}
         width={720}
-        title="Log Detail"
+        title="日志详情"
         onClose={() => {
           setDetailOpen(false);
           setSelectedLog(null);
         }}
       >
         {detailLoading || !selectedLog ? (
-          <Typography.Text type="secondary">Loading detail...</Typography.Text>
+          <Typography.Text type="secondary">正在加载详情...</Typography.Text>
         ) : (
           <Space direction="vertical" size={20} style={{ width: "100%" }}>
             <Descriptions column={2} bordered size="small">
               <Descriptions.Item label="Trace ID" span={2}>
                 {selectedLog.trace_id || "-"}
               </Descriptions.Item>
-              <Descriptions.Item label="Provider">{selectedLog.provider_name || "-"}</Descriptions.Item>
-              <Descriptions.Item label="Key">{selectedLog.provider_key_name || "-"}</Descriptions.Item>
-              <Descriptions.Item label="Client">{selectedLog.client_api_key_name || "-"}</Descriptions.Item>
-              <Descriptions.Item label="Model">{selectedLog.model_public_name || "-"}</Descriptions.Item>
-              <Descriptions.Item label="Upstream Model">{selectedLog.upstream_model || "-"}</Descriptions.Item>
-              <Descriptions.Item label="Status">
-                <Tag color={selectedLog.success ? "green" : "red"}>{selectedLog.success ? "success" : "failed"}</Tag>
+              <Descriptions.Item label="提供方">{selectedLog.provider_name || "-"}</Descriptions.Item>
+              <Descriptions.Item label="密钥">{selectedLog.provider_key_name || "-"}</Descriptions.Item>
+              <Descriptions.Item label="客户端">{selectedLog.client_api_key_name || "-"}</Descriptions.Item>
+              <Descriptions.Item label="模型">{selectedLog.model_public_name || "-"}</Descriptions.Item>
+              <Descriptions.Item label="上游模型">{selectedLog.upstream_model || "-"}</Descriptions.Item>
+              <Descriptions.Item label="状态">
+                <Tag color={selectedLog.success ? "green" : "red"}>{selectedLog.success ? "成功" : "失败"}</Tag>
               </Descriptions.Item>
               <Descriptions.Item label="HTTP">{selectedLog.http_status}</Descriptions.Item>
-              <Descriptions.Item label="Latency">{selectedLog.latency_ms} ms</Descriptions.Item>
-              <Descriptions.Item label="Prompt Tokens">{selectedLog.prompt_tokens}</Descriptions.Item>
-              <Descriptions.Item label="Completion Tokens">{selectedLog.completion_tokens}</Descriptions.Item>
-              <Descriptions.Item label="Total Tokens">{selectedLog.total_tokens}</Descriptions.Item>
-              <Descriptions.Item label="Error Type">{selectedLog.error_type || "-"}</Descriptions.Item>
-              <Descriptions.Item label="Error Message" span={2}>
+              <Descriptions.Item label="延迟">{selectedLog.latency_ms} ms</Descriptions.Item>
+              <Descriptions.Item label="输入 Tokens">{selectedLog.prompt_tokens}</Descriptions.Item>
+              <Descriptions.Item label="输出 Tokens">{selectedLog.completion_tokens}</Descriptions.Item>
+              <Descriptions.Item label="总 Tokens">{selectedLog.total_tokens}</Descriptions.Item>
+              <Descriptions.Item label="错误类型">{selectedLog.error_type || "-"}</Descriptions.Item>
+              <Descriptions.Item label="错误信息" span={2}>
                 {selectedLog.error_message || "-"}
               </Descriptions.Item>
             </Descriptions>
 
             <div>
-              <Typography.Title level={5}>Request Payload</Typography.Title>
+              <Typography.Title level={5}>请求体</Typography.Title>
               <pre className="json-preview">{formatJSON(selectedLog.request_payload)}</pre>
             </div>
             <div>
-              <Typography.Title level={5}>Response Payload</Typography.Title>
+              <Typography.Title level={5}>响应体</Typography.Title>
               <pre className="json-preview">{formatJSON(selectedLog.response_payload)}</pre>
             </div>
             <div>
-              <Typography.Title level={5}>Metadata</Typography.Title>
+              <Typography.Title level={5}>元数据</Typography.Title>
               <pre className="json-preview">{formatJSON(selectedLog.metadata)}</pre>
             </div>
           </Space>

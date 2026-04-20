@@ -1,16 +1,16 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import { Alert, App, Button, Card, Select, Space, Table, Tabs, Tag, Typography } from "antd";
 import { fetchClientKeys, fetchModels } from "../api/client";
 import PageHeaderCard from "../components/PageHeaderCard";
 import useSettingsStore from "../store/settingsStore";
 
 const errorRows = [
-  { key: "unauthorized", code: 401, type: "unauthorized", meaning: "Client API Key missing or invalid" },
-  { key: "forbidden", code: 403, type: "model_forbidden", meaning: "Client key is not allowed to access the model" },
-  { key: "budget", code: 429, type: "budget_exceeded", meaning: "Daily or monthly budget has been exceeded" },
-  { key: "quota", code: 429, type: "rpm_limit_exceeded", meaning: "Request rate or token quota exceeded" },
-  { key: "notfound", code: 404, type: "not_found", meaning: "Model mapping does not exist or is disabled" },
-  { key: "upstream", code: 502, type: "upstream_error", meaning: "Upstream provider request failed" },
+  { key: "unauthorized", code: 401, type: "unauthorized", meaning: "客户端 API Key 缺失或无效" },
+  { key: "forbidden", code: 403, type: "model_forbidden", meaning: "当前客户端密钥无权访问该模型" },
+  { key: "budget", code: 429, type: "budget_exceeded", meaning: "已超出每日或每月预算" },
+  { key: "quota", code: 429, type: "rpm_limit_exceeded", meaning: "已超出请求速率或 Token 配额" },
+  { key: "notfound", code: 404, type: "not_found", meaning: "模型映射不存在或已停用" },
+  { key: "upstream", code: 502, type: "upstream_error", meaning: "上游提供方请求失败" },
 ];
 
 function codeBlock(text) {
@@ -45,7 +45,7 @@ export default function ApiDocsPage() {
         if (!active) {
           return;
         }
-        message.error(error.response?.data?.error?.message || error.message || "Failed to load API docs data");
+        message.error(error.response?.data?.error?.message || error.message || "加载接口文档数据失败");
       }
     };
 
@@ -121,19 +121,19 @@ print(response.json())`;
   return (
     <Space direction="vertical" size={24} style={{ width: "100%" }}>
       <PageHeaderCard
-        eyebrow="Quickstart"
-        title="Business API docs and copy-paste examples"
-        description="Use this page to onboard application teams onto the gateway. It documents auth, supported routes, common errors, and concrete request examples against the current endpoint."
+        eyebrow="快速开始"
+        title="业务 API 文档和可直接复制的示例"
+        description="这个页面用于帮助业务团队接入网关，包含认证方式、支持的接口、常见错误以及基于当前环境的请求示例。"
         actions={
           <Space wrap>
             <Button onClick={() => window.open(`${apiBaseUrl}/docs`, "_blank", "noopener,noreferrer")}>
-              Open Swagger UI
+              打开 Swagger UI
             </Button>
             <Button onClick={() => window.open(`${apiBaseUrl}/redoc`, "_blank", "noopener,noreferrer")}>
-              Open ReDoc
+              打开 ReDoc
             </Button>
             <Button onClick={() => window.open(`${apiBaseUrl}/openapi.json`, "_blank", "noopener,noreferrer")}>
-              View OpenAPI
+              查看 OpenAPI
             </Button>
             <Button
               type="primary"
@@ -144,7 +144,7 @@ print(response.json())`;
                 link.click();
               }}
             >
-              Download OpenAPI
+              下载 OpenAPI
             </Button>
           </Space>
         }
@@ -153,22 +153,22 @@ print(response.json())`;
       <Alert
         type="info"
         showIcon
-        message="Client keys are shown in plaintext only at creation time"
-        description="The console stores only masked values afterward. The examples below use the selected client key name as a placeholder. Replace it with the actual plaintext key you saved when the key was created."
+        message="客户端密钥明文只会在创建时展示一次"
+        description="控制台后续只保存脱敏值。下面的示例会用你选择的客户端密钥名称作为占位符，请替换成你创建时保存下来的真实明文密钥。"
       />
 
       <section className="panel-card">
         <Space direction="vertical" size={16} style={{ width: "100%" }}>
-          <Typography.Title level={4}>Environment</Typography.Title>
+          <Typography.Title level={4}>环境信息</Typography.Title>
           <Space wrap>
             <Tag color="blue">Base URL: {apiBaseUrl}</Tag>
-            <Tag color="green">Auth: Bearer client_api_key</Tag>
-            <Tag color="gold">Selected model: {selectedModel || "-"}</Tag>
+            <Tag color="green">认证：Bearer client_api_key</Tag>
+            <Tag color="gold">当前模型：{selectedModel || "-"}</Tag>
           </Space>
 
           <Space wrap size={16}>
             <div style={{ minWidth: 280 }}>
-              <Typography.Text strong>Example model</Typography.Text>
+              <Typography.Text strong>示例模型</Typography.Text>
               <Select
                 style={{ width: "100%", marginTop: 8 }}
                 value={selectedModel || undefined}
@@ -180,7 +180,7 @@ print(response.json())`;
               />
             </div>
             <div style={{ minWidth: 280 }}>
-              <Typography.Text strong>Client key placeholder</Typography.Text>
+              <Typography.Text strong>客户端密钥占位符</Typography.Text>
               <Select
                 style={{ width: "100%", marginTop: 8 }}
                 value={selectedClientKeyName || undefined}
@@ -195,63 +195,62 @@ print(response.json())`;
 
           {selectedModelInfo ? (
             <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-              Current route target: {selectedModelInfo.public_name} {"->"} {selectedModelInfo.upstream_model} via{" "}
-              {selectedModelInfo.provider_name}
+              当前路由目标：{selectedModelInfo.public_name} {"->"} {selectedModelInfo.upstream_model}，提供方 {selectedModelInfo.provider_name}
             </Typography.Paragraph>
           ) : null}
         </Space>
       </section>
 
       <section className="panel-card">
-        <Typography.Title level={4}>Authentication</Typography.Title>
+        <Typography.Title level={4}>认证方式</Typography.Title>
         <Typography.Paragraph>
-          All business-facing `/v1/*` routes require your own client key, not the upstream provider key.
+          所有业务侧 `/v1/*` 接口都要求使用你自己的客户端密钥，而不是上游提供方密钥。
         </Typography.Paragraph>
         {codeBlock(`Authorization: Bearer ${authHint}`)}
       </section>
 
       <section className="panel-card">
-        <Typography.Title level={4}>Supported Routes</Typography.Title>
+        <Typography.Title level={4}>支持的接口</Typography.Title>
         <Table
           rowKey="path"
           pagination={false}
           dataSource={[
-            { path: "/v1/models", method: "GET", note: "List models visible to the current client key" },
-            { path: "/v1/chat/completions", method: "POST", note: "Proxy OpenAI-compatible chat completions" },
-            { path: "/v1/embeddings", method: "POST", note: "Proxy OpenAI-compatible embeddings" },
+            { path: "/v1/models", method: "GET", note: "列出当前客户端密钥可见的模型" },
+            { path: "/v1/chat/completions", method: "POST", note: "代理 OpenAI 兼容的对话补全接口" },
+            { path: "/v1/embeddings", method: "POST", note: "代理 OpenAI 兼容的向量接口" },
           ]}
           columns={[
-            { title: "Method", dataIndex: "method", key: "method", width: 120 },
-            { title: "Path", dataIndex: "path", key: "path" },
-            { title: "Description", dataIndex: "note", key: "note" },
+            { title: "方法", dataIndex: "method", key: "method", width: 120 },
+            { title: "路径", dataIndex: "path", key: "path" },
+            { title: "说明", dataIndex: "note", key: "note" },
           ]}
         />
       </section>
 
       <section className="panel-card">
-        <Typography.Title level={4}>Examples</Typography.Title>
+        <Typography.Title level={4}>示例</Typography.Title>
         <Tabs
           items={[
-            { key: "curl-chat", label: "curl chat", children: codeBlock(curlChat) },
-            { key: "curl-embeddings", label: "curl embeddings", children: codeBlock(curlEmbeddings) },
+            { key: "curl-chat", label: "curl 对话", children: codeBlock(curlChat) },
+            { key: "curl-embeddings", label: "curl 向量", children: codeBlock(curlEmbeddings) },
             { key: "javascript", label: "JavaScript", children: codeBlock(jsExample) },
             { key: "python", label: "Python", children: codeBlock(pythonExample) },
-            { key: "chat-payload", label: "chat payload", children: codeBlock(chatPayload) },
-            { key: "embeddings-payload", label: "embeddings payload", children: codeBlock(embeddingsPayload) },
+            { key: "chat-payload", label: "对话请求体", children: codeBlock(chatPayload) },
+            { key: "embeddings-payload", label: "向量请求体", children: codeBlock(embeddingsPayload) },
           ]}
         />
       </section>
 
       <section className="panel-card">
-        <Typography.Title level={4}>Error Types</Typography.Title>
+        <Typography.Title level={4}>错误类型</Typography.Title>
         <Table
           rowKey="key"
           pagination={false}
           dataSource={errorRows}
           columns={[
             { title: "HTTP", dataIndex: "code", key: "code", width: 90 },
-            { title: "Type", dataIndex: "type", key: "type", width: 220 },
-            { title: "Meaning", dataIndex: "meaning", key: "meaning" },
+            { title: "类型", dataIndex: "type", key: "type", width: 220 },
+            { title: "含义", dataIndex: "meaning", key: "meaning" },
           ]}
         />
       </section>
