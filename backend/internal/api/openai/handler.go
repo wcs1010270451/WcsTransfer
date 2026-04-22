@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -60,6 +61,7 @@ type chatLogState struct {
 	promptTokens     int
 	completionTokens int
 	totalTokens      int
+	reservedAmount   float64
 	costAmount       float64
 	billableAmount   float64
 	errorType        string
@@ -366,6 +368,8 @@ func (h *Handler) handleChatCompletions(c *gin.Context, options chatCompletionOp
 	logState.metadata["cost_output_per_1m"] = route.Model.CostOutputPer1M
 	logState.metadata["sale_input_per_1m"] = route.Model.SaleInputPer1M
 	logState.metadata["sale_output_per_1m"] = route.Model.SaleOutputPer1M
+	logState.metadata["reserve_multiplier"] = route.Model.ReserveMultiplier
+	logState.metadata["reserve_min_amount"] = route.Model.ReserveMinAmount
 
 	route, err = applyChatRouteOptions(route, options, logState.metadata)
 	if err != nil {
@@ -391,6 +395,19 @@ func (h *Handler) handleChatCompletions(c *gin.Context, options chatCompletionOp
 	}
 	if _, exists := payload["temperature"]; !exists {
 		payload["temperature"] = route.Model.Temperature
+	}
+	if clientKey, ok := middleware.ClientAPIKeyFromContext(c); ok && clientKey.TenantID > 0 {
+		requiredReserve := estimateChatReserveAmount(payload, route.Model)
+		logState.reservedAmount = requiredReserve
+		logState.metadata["required_wallet_reserve"] = requiredReserve
+		if requiredReserve > 0 && clientKey.TenantWalletBalance < requiredReserve {
+			writeJSONError(
+				http.StatusPaymentRequired,
+				"wallet_reserve_insufficient",
+				fmt.Sprintf("tenant wallet balance is below the required reserve %.4f USD", requiredReserve),
+			)
+			return
+		}
 	}
 
 	rewrittenBody, err := json.Marshal(payload)
@@ -655,6 +672,8 @@ func (h *Handler) handleEmbeddings(c *gin.Context, options chatCompletionOptions
 	logState.metadata["cost_output_per_1m"] = route.Model.CostOutputPer1M
 	logState.metadata["sale_input_per_1m"] = route.Model.SaleInputPer1M
 	logState.metadata["sale_output_per_1m"] = route.Model.SaleOutputPer1M
+	logState.metadata["reserve_multiplier"] = route.Model.ReserveMultiplier
+	logState.metadata["reserve_min_amount"] = route.Model.ReserveMinAmount
 
 	route, err = applyChatRouteOptions(route, options, logState.metadata)
 	if err != nil {
@@ -673,6 +692,19 @@ func (h *Handler) handleEmbeddings(c *gin.Context, options chatCompletionOptions
 	}
 
 	payload["model"] = route.Model.UpstreamModel
+	if clientKey, ok := middleware.ClientAPIKeyFromContext(c); ok && clientKey.TenantID > 0 {
+		requiredReserve := estimateEmbeddingsReserveAmount(payload, route.Model)
+		logState.reservedAmount = requiredReserve
+		logState.metadata["required_wallet_reserve"] = requiredReserve
+		if requiredReserve > 0 && clientKey.TenantWalletBalance < requiredReserve {
+			writeJSONError(
+				http.StatusPaymentRequired,
+				"wallet_reserve_insufficient",
+				fmt.Sprintf("tenant wallet balance is below the required reserve %.4f USD", requiredReserve),
+			)
+			return
+		}
+	}
 	rewrittenBody, err := json.Marshal(payload)
 	if err != nil {
 		writeJSONError(http.StatusInternalServerError, "internal_error", "failed to encode upstream payload")
@@ -1069,7 +1101,7 @@ func (h *Handler) writeRequestLog(ctx context.Context, startedAt time.Time, stat
 		latencyMS = state.latencyMS
 	}
 
-	_ = h.logWriter.CreateRequestLog(ctx, entity.CreateRequestLogInput{
+	requestLogID, err := h.logWriter.CreateRequestLog(ctx, entity.CreateRequestLogInput{
 		TraceID:          state.traceID,
 		RequestType:      state.requestType,
 		ModelPublicName:  state.modelPublicName,
@@ -1086,6 +1118,7 @@ func (h *Handler) writeRequestLog(ctx context.Context, startedAt time.Time, stat
 		PromptTokens:     state.promptTokens,
 		CompletionTokens: state.completionTokens,
 		TotalTokens:      state.totalTokens,
+		ReservedAmount:   state.reservedAmount,
 		CostAmount:       state.costAmount,
 		BillableAmount:   state.billableAmount,
 		ErrorType:        state.errorType,
@@ -1094,9 +1127,22 @@ func (h *Handler) writeRequestLog(ctx context.Context, startedAt time.Time, stat
 		ResponsePayload:  state.responsePayload,
 		Metadata:         metadataBytes,
 	})
+	if err != nil {
+		return
+	}
 
 	if state.success && state.clientAPIKeyID > 0 && state.billableAmount > 0 {
-		_ = h.logWriter.DeductTenantWalletUsage(ctx, state.clientAPIKeyID, state.billableAmount, "request "+state.traceID)
+		_ = h.logWriter.DeductTenantWalletUsage(ctx, entity.TenantWalletUsageDebitInput{
+			ClientAPIKeyID:  state.clientAPIKeyID,
+			RequestLogID:    requestLogID,
+			TraceID:         state.traceID,
+			ModelPublicName: state.modelPublicName,
+			TotalTokens:     state.totalTokens,
+			ReservedAmount:  state.reservedAmount,
+			CostAmount:      state.costAmount,
+			BillableAmount:  state.billableAmount,
+			Note:            "request " + state.traceID,
+		})
 	}
 }
 
@@ -1411,4 +1457,104 @@ func amountsForUsage(promptTokens int, completionTokens int, model entity.Model)
 	costAmount := (float64(promptTokens)*model.CostInputPer1M + float64(completionTokens)*model.CostOutputPer1M) / 1_000_000
 	billableAmount := (float64(promptTokens)*model.SaleInputPer1M + float64(completionTokens)*model.SaleOutputPer1M) / 1_000_000
 	return costAmount, billableAmount
+}
+
+func estimateChatReserveAmount(payload map[string]any, model entity.Model) float64 {
+	promptTokens := estimatePromptTokens(payload["messages"])
+	completionTokens := extractPositiveInt(payload["max_tokens"])
+	if completionTokens <= 0 {
+		completionTokens = model.MaxTokens
+	}
+	if completionTokens <= 0 {
+		completionTokens = 1024
+	}
+	_, billableAmount := amountsForUsage(promptTokens, completionTokens, model)
+	return applyReservePolicy(billableAmount, model)
+}
+
+func estimateEmbeddingsReserveAmount(payload map[string]any, model entity.Model) float64 {
+	promptTokens := estimatePromptTokens(payload["input"])
+	if promptTokens <= 0 {
+		promptTokens = 256
+	}
+	_, billableAmount := amountsForUsage(promptTokens, 0, model)
+	return applyReservePolicy(billableAmount, model)
+}
+
+func applyReservePolicy(estimatedBillableAmount float64, model entity.Model) float64 {
+	reserve := estimatedBillableAmount
+	multiplier := model.ReserveMultiplier
+	if multiplier <= 0 {
+		multiplier = 1
+	}
+	reserve *= multiplier
+	if reserve < model.ReserveMinAmount {
+		reserve = model.ReserveMinAmount
+	}
+	if reserve < 0 {
+		return 0
+	}
+	return reserve
+}
+
+func extractPositiveInt(value any) int {
+	switch typed := value.(type) {
+	case float64:
+		if typed > 0 {
+			return int(typed)
+		}
+	case int:
+		if typed > 0 {
+			return typed
+		}
+	case int64:
+		if typed > 0 {
+			return int(typed)
+		}
+	case json.Number:
+		number, err := typed.Int64()
+		if err == nil && number > 0 {
+			return int(number)
+		}
+	}
+	return 0
+}
+
+func estimatePromptTokens(value any) int {
+	switch typed := value.(type) {
+	case nil:
+		return 0
+	case string:
+		return estimateTokensFromString(typed)
+	case []any:
+		total := 0
+		for _, item := range typed {
+			total += estimatePromptTokens(item)
+		}
+		return total
+	case map[string]any:
+		total := 0
+		for _, item := range typed {
+			total += estimatePromptTokens(item)
+		}
+		return total
+	default:
+		raw, err := json.Marshal(typed)
+		if err != nil {
+			return 0
+		}
+		return estimateTokensFromString(string(raw))
+	}
+}
+
+func estimateTokensFromString(value string) int {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return 0
+	}
+	estimated := len([]rune(trimmed)) / 4
+	if estimated <= 0 {
+		return 1
+	}
+	return estimated
 }

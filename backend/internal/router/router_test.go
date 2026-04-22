@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,18 +14,23 @@ import (
 	"wcstransfer/backend/internal/config"
 	"wcstransfer/backend/internal/entity"
 	"wcstransfer/backend/internal/platform"
+	adminauthsvc "wcstransfer/backend/internal/service/adminauth"
 )
 
 type stubStore struct {
-	providers    []entity.Provider
-	tenants      []entity.Tenant
-	clientKeys   []entity.ClientAPIKey
-	providerKeys []entity.ProviderKey
-	models       []entity.Model
-	requestLogs  []entity.RequestLog
-	logDetails   map[int64]entity.RequestLogDetail
-	createdLogs  []entity.CreateRequestLogInput
-	dashboard    entity.DashboardStats
+	providers       []entity.Provider
+	tenants         []entity.Tenant
+	tenantUsers     []entity.TenantUser
+	walletLedger    []entity.TenantWalletLedgerEntry
+	clientKeys      []entity.ClientAPIKey
+	providerKeys    []entity.ProviderKey
+	models          []entity.Model
+	requestLogs     []entity.RequestLog
+	logDetails      map[int64]entity.RequestLogDetail
+	createdLogs     []entity.CreateRequestLogInput
+	adminActionLogs []entity.CreateAdminActionLogInput
+	reconciliation  []entity.TenantBillingReconciliation
+	dashboard       entity.DashboardStats
 }
 
 func (s *stubStore) ListProviders(context.Context) ([]entity.Provider, error) {
@@ -68,6 +74,20 @@ func (s *stubStore) ListTenants(context.Context) ([]entity.Tenant, error) {
 	return s.tenants, nil
 }
 
+func (s *stubStore) CreateTenant(_ context.Context, input entity.CreateTenantInput) (entity.Tenant, error) {
+	item := entity.Tenant{
+		ID:                  int64(len(s.tenants) + 1),
+		Name:                input.Name,
+		Slug:                input.Slug,
+		Status:              input.Status,
+		MaxClientKeys:       input.MaxClientKeys,
+		MinAvailableBalance: input.MinAvailableBalance,
+		Notes:               input.Notes,
+	}
+	s.tenants = append([]entity.Tenant{item}, s.tenants...)
+	return item, nil
+}
+
 func (s *stubStore) UpdateTenant(_ context.Context, input entity.UpdateTenantInput) (entity.Tenant, error) {
 	for index, item := range s.tenants {
 		if item.ID == input.ID {
@@ -75,6 +95,7 @@ func (s *stubStore) UpdateTenant(_ context.Context, input entity.UpdateTenantInp
 			item.Slug = input.Slug
 			item.Status = input.Status
 			item.MaxClientKeys = input.MaxClientKeys
+			item.MinAvailableBalance = input.MinAvailableBalance
 			item.Notes = input.Notes
 			s.tenants[index] = item
 			return item, nil
@@ -84,15 +105,137 @@ func (s *stubStore) UpdateTenant(_ context.Context, input entity.UpdateTenantInp
 	return entity.Tenant{}, context.Canceled
 }
 
+func (s *stubStore) ListTenantUsers(_ context.Context, tenantID int64) ([]entity.TenantUser, error) {
+	items := make([]entity.TenantUser, 0)
+	for _, item := range s.tenantUsers {
+		if item.TenantID == tenantID {
+			items = append(items, item)
+		}
+	}
+	return items, nil
+}
+
+func (s *stubStore) CreateTenantUser(_ context.Context, input entity.CreateTenantUserInput) (entity.TenantUser, error) {
+	item := entity.TenantUser{
+		ID:       int64(len(s.tenantUsers) + 1),
+		TenantID: input.TenantID,
+		Email:    input.Email,
+		FullName: input.FullName,
+		Status:   input.Status,
+	}
+	for _, tenant := range s.tenants {
+		if tenant.ID == input.TenantID {
+			item.TenantName = tenant.Name
+			break
+		}
+	}
+	s.tenantUsers = append([]entity.TenantUser{item}, s.tenantUsers...)
+	return item, nil
+}
+
+func (s *stubStore) UpdateTenantUserStatus(_ context.Context, input entity.UpdateTenantUserStatusInput) (entity.TenantUser, error) {
+	for index, item := range s.tenantUsers {
+		if item.ID == input.UserID && item.TenantID == input.TenantID {
+			item.Status = input.Status
+			s.tenantUsers[index] = item
+			return item, nil
+		}
+	}
+	return entity.TenantUser{}, context.Canceled
+}
+
+func (s *stubStore) ResetTenantUserPassword(_ context.Context, input entity.ResetTenantUserPasswordInput) error {
+	for _, item := range s.tenantUsers {
+		if item.ID == input.UserID && item.TenantID == input.TenantID {
+			return nil
+		}
+	}
+	return context.Canceled
+}
+
 func (s *stubStore) AdjustTenantWallet(_ context.Context, input entity.TenantWalletAdjustmentInput) (entity.Tenant, error) {
 	for index, item := range s.tenants {
 		if item.ID == input.TenantID {
+			before := item.WalletBalance
 			item.WalletBalance += input.Amount
 			s.tenants[index] = item
+			s.walletLedger = append([]entity.TenantWalletLedgerEntry{{
+				ID:             int64(len(s.walletLedger) + 1),
+				TenantID:       item.ID,
+				Direction:      "credit",
+				Amount:         input.Amount,
+				BalanceBefore:  before,
+				BalanceAfter:   item.WalletBalance,
+				Note:           input.Note,
+				OperatorType:   "admin",
+				OperatorUserID: input.OperatorID,
+				CreatedAt:      time.Now(),
+			}}, s.walletLedger...)
 			return item, nil
 		}
 	}
 	return entity.Tenant{}, context.Canceled
+}
+
+func (s *stubStore) CorrectTenantWallet(_ context.Context, input entity.TenantWalletCorrectionInput) (entity.Tenant, error) {
+	for index, item := range s.tenants {
+		if item.ID == input.TenantID {
+			before := item.WalletBalance
+			amount := input.Amount
+			direction := "credit"
+			if amount < 0 {
+				direction = "debit"
+				if before+amount < 0 {
+					return entity.Tenant{}, context.Canceled
+				}
+			}
+			item.WalletBalance += amount
+			s.tenants[index] = item
+			s.walletLedger = append([]entity.TenantWalletLedgerEntry{{
+				ID:             int64(len(s.walletLedger) + 1),
+				TenantID:       item.ID,
+				Direction:      direction,
+				Amount:         math.Abs(amount),
+				BalanceBefore:  before,
+				BalanceAfter:   item.WalletBalance,
+				Note:           input.Note,
+				OperatorType:   "admin",
+				OperatorUserID: input.OperatorID,
+				CreatedAt:      time.Now(),
+			}}, s.walletLedger...)
+			return item, nil
+		}
+	}
+	return entity.Tenant{}, context.Canceled
+}
+
+func (s *stubStore) ListTenantWalletLedger(_ context.Context, tenantID int64, page int, pageSize int) (entity.TenantWalletLedgerPage, error) {
+	filtered := make([]entity.TenantWalletLedgerEntry, 0)
+	for _, item := range s.walletLedger {
+		if item.TenantID == tenantID {
+			filtered = append(filtered, item)
+		}
+	}
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	start := (page - 1) * pageSize
+	if start > len(filtered) {
+		start = len(filtered)
+	}
+	end := start + pageSize
+	if end > len(filtered) {
+		end = len(filtered)
+	}
+	return entity.TenantWalletLedgerPage{
+		Items:    filtered[start:end],
+		Total:    int64(len(filtered)),
+		Page:     page,
+		PageSize: pageSize,
+	}, nil
 }
 
 func (s *stubStore) ListClientAPIKeys(context.Context) ([]entity.ClientAPIKey, error) {
@@ -283,6 +426,15 @@ func (s *stubStore) AuthenticateClientAPIKey(_ context.Context, rawKey string) (
 			if len(item.AllowedModels) == 0 && len(item.AllowedModelIDs) > 0 {
 				item.AllowedModels = s.allowedModelNames(item.AllowedModelIDs)
 			}
+			if item.TenantID > 0 {
+				for _, tenant := range s.tenants {
+					if tenant.ID == item.TenantID {
+						item.TenantWalletBalance = tenant.WalletBalance
+						item.TenantMinAvailableBalance = tenant.MinAvailableBalance
+						break
+					}
+				}
+			}
 			return item, nil
 		}
 	}
@@ -292,11 +444,12 @@ func (s *stubStore) AuthenticateClientAPIKey(_ context.Context, rawKey string) (
 
 func (s *stubStore) RegisterTenantUser(_ context.Context, input entity.RegisterTenantUserInput) (entity.TenantUser, error) {
 	tenant := entity.Tenant{
-		ID:            int64(len(s.tenants) + 1),
-		Name:          input.TenantName,
-		Slug:          input.TenantSlug,
-		Status:        "pending",
-		MaxClientKeys: 0,
+		ID:                  int64(len(s.tenants) + 1),
+		Name:                input.TenantName,
+		Slug:                input.TenantSlug,
+		Status:              "pending",
+		MaxClientKeys:       0,
+		MinAvailableBalance: 0.01,
 	}
 	s.tenants = append(s.tenants, tenant)
 	return entity.TenantUser{
@@ -431,19 +584,44 @@ func (s *stubStore) ExportRequestLogs(_ context.Context, input entity.ListReques
 	return page.Items, nil
 }
 
-func (s *stubStore) CreateRequestLog(_ context.Context, input entity.CreateRequestLogInput) error {
-	s.createdLogs = append(s.createdLogs, input)
-	return nil
+func (s *stubStore) ExportTenantRequestLogs(_ context.Context, tenantID int64, input entity.ListRequestLogsInput) ([]entity.RequestLog, error) {
+	input.TenantID = tenantID
+	return s.ExportRequestLogs(context.Background(), input)
 }
 
-func (s *stubStore) DeductTenantWalletUsage(_ context.Context, clientAPIKeyID int64, amount float64, _ string) error {
+func (s *stubStore) CreateRequestLog(_ context.Context, input entity.CreateRequestLogInput) (int64, error) {
+	s.createdLogs = append(s.createdLogs, input)
+	return int64(len(s.createdLogs)), nil
+}
+
+func (s *stubStore) DeductTenantWalletUsage(_ context.Context, input entity.TenantWalletUsageDebitInput) error {
 	for index, item := range s.clientKeys {
-		if item.ID == clientAPIKeyID {
-			item.TenantWalletBalance -= amount
+		if item.ID == input.ClientAPIKeyID {
+			before := item.TenantWalletBalance
+			item.TenantWalletBalance -= input.BillableAmount
 			if item.TenantWalletBalance < 0 {
 				item.TenantWalletBalance = 0
 			}
 			s.clientKeys[index] = item
+			if item.TenantID > 0 {
+				s.walletLedger = append([]entity.TenantWalletLedgerEntry{{
+					ID:              int64(len(s.walletLedger) + 1),
+					TenantID:        item.TenantID,
+					Direction:       "debit",
+					Amount:          input.BillableAmount,
+					BalanceBefore:   before,
+					BalanceAfter:    item.TenantWalletBalance,
+					Note:            input.Note,
+					OperatorType:    "system",
+					RequestLogID:    input.RequestLogID,
+					TraceID:         input.TraceID,
+					ModelPublicName: input.ModelPublicName,
+					TotalTokens:     int64(input.TotalTokens),
+					CostAmount:      input.CostAmount,
+					BillableAmount:  input.BillableAmount,
+					CreatedAt:       time.Now(),
+				}}, s.walletLedger...)
+			}
 			return nil
 		}
 	}
@@ -452,6 +630,27 @@ func (s *stubStore) DeductTenantWalletUsage(_ context.Context, clientAPIKeyID in
 
 func (s *stubStore) GetDashboardStats(context.Context) (entity.DashboardStats, error) {
 	return s.dashboard, nil
+}
+
+func (s *stubStore) GetTenantBillingReconciliation(context.Context) ([]entity.TenantBillingReconciliation, error) {
+	return s.reconciliation, nil
+}
+
+func (s *stubStore) GetProviderRequestAnomalies(context.Context, time.Time, int, float64, float64) ([]entity.ProviderRequestAnomaly, error) {
+	return nil, nil
+}
+
+func (s *stubStore) GetTenantWalletBlockAnomalies(context.Context, time.Time, int, int) ([]entity.TenantWalletBlockAnomaly, error) {
+	return nil, nil
+}
+
+func (s *stubStore) GetTenantBillingDebitAnomalies(context.Context, time.Time, int, float64) ([]entity.TenantBillingDebitAnomaly, error) {
+	return nil, nil
+}
+
+func (s *stubStore) CreateAdminActionLog(_ context.Context, input entity.CreateAdminActionLogInput) error {
+	s.adminActionLogs = append(s.adminActionLogs, input)
+	return nil
 }
 
 func (s *stubStore) ListTenantClientAPIKeys(_ context.Context, tenantID int64) ([]entity.ClientAPIKey, error) {
@@ -526,11 +725,11 @@ func TestPublicRoutes(t *testing.T) {
 
 func TestAdminRoutesRequireTokenWhenConfigured(t *testing.T) {
 	cfg := config.Config{
-		AppName:    "wcstransfer-gateway",
-		Env:        "test",
-		GinMode:    "test",
-		HTTPPort:   "8080",
-		AdminToken: "secret-token",
+		AppName:         "wcstransfer-gateway",
+		Env:             "test",
+		GinMode:         "test",
+		HTTPPort:        "8080",
+		AuthTokenSecret: "admin-auth-secret-for-test",
 	}
 
 	store := &stubStore{}
@@ -547,11 +746,11 @@ func TestAdminRoutesRequireTokenWhenConfigured(t *testing.T) {
 
 func TestAdminRoutesAllowTokenWhenProvided(t *testing.T) {
 	cfg := config.Config{
-		AppName:    "wcstransfer-gateway",
-		Env:        "test",
-		GinMode:    "test",
-		HTTPPort:   "8080",
-		AdminToken: "secret-token",
+		AppName:         "wcstransfer-gateway",
+		Env:             "test",
+		GinMode:         "test",
+		HTTPPort:        "8080",
+		AuthTokenSecret: "admin-auth-secret-for-test",
 	}
 
 	store := &stubStore{
@@ -561,14 +760,222 @@ func TestAdminRoutesAllowTokenWhenProvided(t *testing.T) {
 	}
 
 	engine := New(cfg, &platform.Dependencies{}, &Stores{Admin: store, Public: store})
+	tokenService := adminauthsvc.New(cfg.AuthTokenSecret)
+	token, err := tokenService.IssueToken(42, "ops-admin", "Ops Admin", time.Hour)
+	if err != nil {
+		t.Fatalf("issue admin token: %v", err)
+	}
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/admin/providers", nil)
-	request.Header.Set("Authorization", "Bearer secret-token")
+	request.Header.Set("Authorization", "Bearer "+token)
 	engine.ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
+	}
+}
+
+func TestAdminLogDetailRoute(t *testing.T) {
+	cfg := config.Config{
+		AppName:         "wcstransfer-gateway",
+		Env:             "test",
+		GinMode:         "test",
+		HTTPPort:        "8080",
+		AuthTokenSecret: "admin-auth-secret-for-test",
+	}
+
+	store := &stubStore{
+		logDetails: map[int64]entity.RequestLogDetail{
+			13: {
+				RequestLog: entity.RequestLog{
+					ID:               13,
+					TraceID:          "trace-13",
+					RequestType:      "chat.completions",
+					ModelPublicName:  "qwen-max",
+					HTTPStatus:       http.StatusBadRequest,
+					Success:          false,
+					PromptTokens:     12,
+					CompletionTokens: 0,
+					TotalTokens:      12,
+					ReservedAmount:   0.25,
+					CostAmount:       0.01,
+					BillableAmount:   0.02,
+				},
+				RequestPayload:  json.RawMessage(`{"model":"qwen-max"}`),
+				ResponsePayload: json.RawMessage(`{"error":"bad request"}`),
+				Metadata:        json.RawMessage(`{"source":"test"}`),
+			},
+		},
+	}
+
+	engine := New(cfg, &platform.Dependencies{}, &Stores{Admin: store, Public: store})
+	tokenService := adminauthsvc.New(cfg.AuthTokenSecret)
+	token, err := tokenService.IssueToken(42, "ops-admin", "Ops Admin", time.Hour)
+	if err != nil {
+		t.Fatalf("issue admin token: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/admin/logs/13", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	engine.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "\"reserved_amount\":0.25") {
+		t.Fatalf("expected reserved_amount in response, got %s", recorder.Body.String())
+	}
+}
+
+func TestAdminTenantBillingReconciliationRoute(t *testing.T) {
+	cfg := config.Config{
+		AppName:         "wcstransfer-gateway",
+		Env:             "test",
+		GinMode:         "test",
+		HTTPPort:        "8080",
+		AuthTokenSecret: "admin-auth-secret-for-test",
+	}
+
+	store := &stubStore{
+		reconciliation: []entity.TenantBillingReconciliation{
+			{
+				TenantID:           1,
+				TenantName:         "tenant-a",
+				WalletBalance:      10,
+				LedgerCreditAmount: 12,
+				LedgerDebitAmount:  2,
+				LedgerNetAmount:    10,
+				LogBillableAmount:  2,
+				LogCostAmount:      1.5,
+				IsWalletBalanced:   true,
+				IsBillingBalanced:  true,
+			},
+		},
+	}
+
+	engine := New(cfg, &platform.Dependencies{}, &Stores{Admin: store, Public: store})
+	tokenService := adminauthsvc.New(cfg.AuthTokenSecret)
+	token, err := tokenService.IssueToken(42, "ops-admin", "Ops Admin", time.Hour)
+	if err != nil {
+		t.Fatalf("issue admin token: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/admin/reconciliation/tenants", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	engine.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "\"tenant_name\":\"tenant-a\"") {
+		t.Fatalf("expected reconciliation payload, got %s", recorder.Body.String())
+	}
+}
+
+func TestAdminWalletAdjustRecordsOperatorAndAuditLog(t *testing.T) {
+	cfg := config.Config{
+		AppName:         "wcstransfer-gateway",
+		Env:             "test",
+		GinMode:         "test",
+		HTTPPort:        "8080",
+		AuthTokenSecret: "admin-auth-secret-for-test",
+	}
+
+	store := &stubStore{
+		tenants: []entity.Tenant{
+			{ID: 1, Name: "Tenant A", Slug: "tenant-a", Status: "active", WalletBalance: 5},
+		},
+	}
+	engine := New(cfg, &platform.Dependencies{}, &Stores{Admin: store, Public: store})
+
+	tokenService := adminauthsvc.New(cfg.AuthTokenSecret)
+	token, err := tokenService.IssueToken(42, "ops-admin", "Ops Admin", time.Hour)
+	if err != nil {
+		t.Fatalf("issue admin token: %v", err)
+	}
+
+	body := bytes.NewBufferString(`{"amount":10,"note":"manual top-up"}`)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/admin/tenants/1/wallet/adjust", body)
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, recorder.Code, recorder.Body.String())
+	}
+	if len(store.walletLedger) != 1 {
+		t.Fatalf("expected 1 wallet ledger entry, got %d", len(store.walletLedger))
+	}
+	if store.walletLedger[0].OperatorUserID != 42 {
+		t.Fatalf("expected operator user id 42, got %d", store.walletLedger[0].OperatorUserID)
+	}
+	if len(store.adminActionLogs) != 1 {
+		t.Fatalf("expected 1 admin action log, got %d", len(store.adminActionLogs))
+	}
+	if store.adminActionLogs[0].Action != "tenant.wallet.credit" {
+		t.Fatalf("unexpected admin audit action: %+v", store.adminActionLogs[0])
+	}
+	if store.adminActionLogs[0].AdminUserID != 42 || store.adminActionLogs[0].AdminUsername != "ops-admin" {
+		t.Fatalf("unexpected admin audit actor: %+v", store.adminActionLogs[0])
+	}
+	if store.adminActionLogs[0].RequestPath != "/admin/tenants/:id/wallet/adjust" {
+		t.Fatalf("unexpected admin audit request path: %+v", store.adminActionLogs[0])
+	}
+}
+
+func TestAdminWalletCorrectionRecordsOperatorAndAuditLog(t *testing.T) {
+	cfg := config.Config{
+		AppName:         "wcstransfer-gateway",
+		Env:             "test",
+		GinMode:         "test",
+		HTTPPort:        "8080",
+		AuthTokenSecret: "admin-auth-secret-for-test",
+	}
+
+	store := &stubStore{
+		tenants: []entity.Tenant{
+			{ID: 1, Name: "Tenant A", Slug: "tenant-a", Status: "active", WalletBalance: 5},
+		},
+	}
+	engine := New(cfg, &platform.Dependencies{}, &Stores{Admin: store, Public: store})
+
+	tokenService := adminauthsvc.New(cfg.AuthTokenSecret)
+	token, err := tokenService.IssueToken(42, "ops-admin", "Ops Admin", time.Hour)
+	if err != nil {
+		t.Fatalf("issue admin token: %v", err)
+	}
+
+	body := bytes.NewBufferString(`{"amount":-1.25,"note":"manual reconciliation fix"}`)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/admin/tenants/1/wallet/correct", body)
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, recorder.Code, recorder.Body.String())
+	}
+	if len(store.walletLedger) != 1 {
+		t.Fatalf("expected 1 wallet ledger entry, got %d", len(store.walletLedger))
+	}
+	if store.walletLedger[0].Direction != "debit" || store.walletLedger[0].Amount != 1.25 {
+		t.Fatalf("unexpected wallet ledger correction entry: %+v", store.walletLedger[0])
+	}
+	if store.walletLedger[0].OperatorUserID != 42 {
+		t.Fatalf("expected operator user id 42, got %d", store.walletLedger[0].OperatorUserID)
+	}
+	if len(store.adminActionLogs) != 1 {
+		t.Fatalf("expected 1 admin action log, got %d", len(store.adminActionLogs))
+	}
+	if store.adminActionLogs[0].Action != "tenant.wallet.reconcile" {
+		t.Fatalf("unexpected admin audit action: %+v", store.adminActionLogs[0])
+	}
+	if store.adminActionLogs[0].RequestPath != "/admin/tenants/:id/wallet/correct" {
+		t.Fatalf("unexpected admin audit request path: %+v", store.adminActionLogs[0])
 	}
 }
 
@@ -1147,6 +1554,70 @@ func TestChatCompletionsProxyRoute(t *testing.T) {
 	}
 }
 
+func TestChatCompletionsRejectsInsufficientWalletReserve(t *testing.T) {
+	cfg := config.Config{
+		AppName:  "wcstransfer-gateway",
+		Env:      "test",
+		GinMode:  "test",
+		HTTPPort: "8080",
+	}
+
+	store := &stubStore{
+		tenants: []entity.Tenant{
+			{ID: 1, Name: "tenant-a", Slug: "tenant-a", Status: "active", MaxClientKeys: 1, WalletBalance: 0.05, MinAvailableBalance: 0.01},
+		},
+		clientKeys: []entity.ClientAPIKey{
+			{ID: 7, TenantID: 1, Name: "tenant-client", PlainAPIKey: "wcs_live_low_balance", Status: "active"},
+		},
+		models: []entity.Model{
+			{
+				ID:              1,
+				PublicName:      "gpt-4o-mini",
+				ProviderID:      1,
+				ProviderName:    "stub-provider",
+				UpstreamModel:   "gpt-4o-mini-upstream",
+				RouteStrategy:   "fixed",
+				IsEnabled:       true,
+				MaxTokens:       200000,
+				SaleOutputPer1M: 10,
+			},
+		},
+		providerKeys: []entity.ProviderKey{
+			{ID: 1, ProviderID: 1, ProviderName: "stub-provider", Name: "primary", Status: "active", Weight: 100, Priority: 10, MaskedAPIKey: "sk-p***ary"},
+		},
+	}
+
+	engine := New(cfg, &platform.Dependencies{}, &Stores{
+		Admin:  store,
+		Auth:   store,
+		Log:    store,
+		Public: store,
+	})
+
+	body, err := json.Marshal(map[string]any{
+		"model": "gpt-4o-mini",
+		"messages": []map[string]string{
+			{"role": "user", "content": "hello"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	request.Header.Set("Authorization", "Bearer wcs_live_low_balance")
+	request.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusPaymentRequired {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusPaymentRequired, recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "wallet_reserve_insufficient") {
+		t.Fatalf("expected wallet_reserve_insufficient, got %s", recorder.Body.String())
+	}
+}
+
 func TestChatCompletionsLogsAmounts(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1446,12 +1917,40 @@ func (s *stubStoreWithUpstream) ListTenants(ctx context.Context) ([]entity.Tenan
 	return s.base.ListTenants(ctx)
 }
 
+func (s *stubStoreWithUpstream) CreateTenant(ctx context.Context, input entity.CreateTenantInput) (entity.Tenant, error) {
+	return s.base.CreateTenant(ctx, input)
+}
+
 func (s *stubStoreWithUpstream) UpdateTenant(ctx context.Context, input entity.UpdateTenantInput) (entity.Tenant, error) {
 	return s.base.UpdateTenant(ctx, input)
 }
 
+func (s *stubStoreWithUpstream) ListTenantUsers(ctx context.Context, tenantID int64) ([]entity.TenantUser, error) {
+	return s.base.ListTenantUsers(ctx, tenantID)
+}
+
+func (s *stubStoreWithUpstream) CreateTenantUser(ctx context.Context, input entity.CreateTenantUserInput) (entity.TenantUser, error) {
+	return s.base.CreateTenantUser(ctx, input)
+}
+
+func (s *stubStoreWithUpstream) UpdateTenantUserStatus(ctx context.Context, input entity.UpdateTenantUserStatusInput) (entity.TenantUser, error) {
+	return s.base.UpdateTenantUserStatus(ctx, input)
+}
+
+func (s *stubStoreWithUpstream) ResetTenantUserPassword(ctx context.Context, input entity.ResetTenantUserPasswordInput) error {
+	return s.base.ResetTenantUserPassword(ctx, input)
+}
+
 func (s *stubStoreWithUpstream) AdjustTenantWallet(ctx context.Context, input entity.TenantWalletAdjustmentInput) (entity.Tenant, error) {
 	return s.base.AdjustTenantWallet(ctx, input)
+}
+
+func (s *stubStoreWithUpstream) CorrectTenantWallet(ctx context.Context, input entity.TenantWalletCorrectionInput) (entity.Tenant, error) {
+	return s.base.CorrectTenantWallet(ctx, input)
+}
+
+func (s *stubStoreWithUpstream) ListTenantWalletLedger(ctx context.Context, tenantID int64, page int, pageSize int) (entity.TenantWalletLedgerPage, error) {
+	return s.base.ListTenantWalletLedger(ctx, tenantID, page, pageSize)
 }
 
 func (s *stubStoreWithUpstream) ListClientAPIKeys(ctx context.Context) ([]entity.ClientAPIKey, error) {
@@ -1566,16 +2065,40 @@ func (s *stubStoreWithUpstream) ExportRequestLogs(ctx context.Context, input ent
 	return s.base.ExportRequestLogs(ctx, input)
 }
 
-func (s *stubStoreWithUpstream) CreateRequestLog(ctx context.Context, input entity.CreateRequestLogInput) error {
+func (s *stubStoreWithUpstream) ExportTenantRequestLogs(ctx context.Context, tenantID int64, input entity.ListRequestLogsInput) ([]entity.RequestLog, error) {
+	return s.base.ExportTenantRequestLogs(ctx, tenantID, input)
+}
+
+func (s *stubStoreWithUpstream) CreateRequestLog(ctx context.Context, input entity.CreateRequestLogInput) (int64, error) {
 	return s.base.CreateRequestLog(ctx, input)
 }
 
-func (s *stubStoreWithUpstream) DeductTenantWalletUsage(ctx context.Context, clientAPIKeyID int64, amount float64, note string) error {
-	return s.base.DeductTenantWalletUsage(ctx, clientAPIKeyID, amount, note)
+func (s *stubStoreWithUpstream) DeductTenantWalletUsage(ctx context.Context, input entity.TenantWalletUsageDebitInput) error {
+	return s.base.DeductTenantWalletUsage(ctx, input)
 }
 
 func (s *stubStoreWithUpstream) GetDashboardStats(ctx context.Context) (entity.DashboardStats, error) {
 	return s.base.GetDashboardStats(ctx)
+}
+
+func (s *stubStoreWithUpstream) GetTenantBillingReconciliation(ctx context.Context) ([]entity.TenantBillingReconciliation, error) {
+	return s.base.GetTenantBillingReconciliation(ctx)
+}
+
+func (s *stubStoreWithUpstream) GetProviderRequestAnomalies(ctx context.Context, since time.Time, minRequests int, rateLimitedThreshold float64, serverErrorThreshold float64) ([]entity.ProviderRequestAnomaly, error) {
+	return s.base.GetProviderRequestAnomalies(ctx, since, minRequests, rateLimitedThreshold, serverErrorThreshold)
+}
+
+func (s *stubStoreWithUpstream) GetTenantWalletBlockAnomalies(ctx context.Context, since time.Time, walletBlockThreshold int, reserveBlockThreshold int) ([]entity.TenantWalletBlockAnomaly, error) {
+	return s.base.GetTenantWalletBlockAnomalies(ctx, since, walletBlockThreshold, reserveBlockThreshold)
+}
+
+func (s *stubStoreWithUpstream) GetTenantBillingDebitAnomalies(ctx context.Context, since time.Time, minCount int, minBillableAmount float64) ([]entity.TenantBillingDebitAnomaly, error) {
+	return s.base.GetTenantBillingDebitAnomalies(ctx, since, minCount, minBillableAmount)
+}
+
+func (s *stubStoreWithUpstream) CreateAdminActionLog(ctx context.Context, input entity.CreateAdminActionLogInput) error {
+	return s.base.CreateAdminActionLog(ctx, input)
 }
 
 func (s *stubStoreWithUpstream) ListTenantClientAPIKeys(ctx context.Context, tenantID int64) ([]entity.ClientAPIKey, error) {

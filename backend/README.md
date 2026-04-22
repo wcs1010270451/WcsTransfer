@@ -16,8 +16,7 @@ The backend now auto-loads `backend/.env` when present.
 - `APP_ENV`: application environment, defaults to `development`
 - `HTTP_PORT`: HTTP port, defaults to `8080`
 - `GIN_MODE`: Gin mode, defaults to `debug`
-- `ADMIN_TOKEN`: bearer token for `/admin/*` routes. Empty means auth is disabled for now.
-- `AUTH_TOKEN_SECRET`: HMAC secret used to sign tenant portal login tokens
+- `AUTH_TOKEN_SECRET`: HMAC secret used to sign both tenant portal and admin login tokens
 - `CORS_ALLOWED_ORIGINS`: comma-separated frontend origins allowed by CORS
 - `HTTP_READ_TIMEOUT`: defaults to `15s`
 - `HTTP_WRITE_TIMEOUT`: defaults to `60s`
@@ -105,7 +104,6 @@ Anthropic Messages requests made through `/v1/messages` are also written into `r
 
 Tenant users can now register and log in through:
 
-- `POST /portal/auth/register`
 - `POST /portal/auth/login`
 - `GET /portal/me`
 - `GET /portal/client-keys`

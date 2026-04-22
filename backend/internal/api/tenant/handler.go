@@ -1,6 +1,8 @@
 package tenant
 
 import (
+	"bytes"
+	"encoding/csv"
 	"errors"
 	"fmt"
 	"net/http"
@@ -287,6 +289,143 @@ func (h *Handler) Stats(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, stats)
+}
+
+func (h *Handler) WalletLedger(c *gin.Context) {
+	if h.keyStore == nil {
+		writeError(c, http.StatusServiceUnavailable, "service_unavailable", "tenant key store is not configured")
+		return
+	}
+
+	claims, ok := middleware.TenantUserClaimsFromContext(c)
+	if !ok {
+		writeError(c, http.StatusUnauthorized, "auth_error", "unauthorized")
+		return
+	}
+
+	page, ok := parsePositiveIntQuery(c, "page", 1, 1, 1000000)
+	if !ok {
+		return
+	}
+	pageSize, ok := parsePositiveIntQuery(c, "page_size", 20, 1, 200)
+	if !ok {
+		return
+	}
+
+	items, err := h.keyStore.ListTenantWalletLedger(c.Request.Context(), claims.TenantID, page, pageSize)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "database_error", err.Error())
+		return
+	}
+
+	c.JSON(http.StatusOK, items)
+}
+
+func (h *Handler) ExportBilling(c *gin.Context) {
+	if h.keyStore == nil {
+		writeError(c, http.StatusServiceUnavailable, "service_unavailable", "tenant key store is not configured")
+		return
+	}
+
+	claims, ok := middleware.TenantUserClaimsFromContext(c)
+	if !ok {
+		writeError(c, http.StatusUnauthorized, "auth_error", "unauthorized")
+		return
+	}
+
+	httpStatus, ok := parseNonNegativeIntQuery(c, "http_status")
+	if !ok {
+		return
+	}
+	createdFrom, ok := parseTimeQuery(c, "created_from")
+	if !ok {
+		return
+	}
+	createdTo, ok := parseTimeQuery(c, "created_to")
+	if !ok {
+		return
+	}
+
+	var success *bool
+	if rawSuccess := strings.TrimSpace(c.Query("success")); rawSuccess != "" {
+		parsed, err := strconv.ParseBool(rawSuccess)
+		if err != nil {
+			writeError(c, http.StatusBadRequest, "invalid_request", "success must be true or false")
+			return
+		}
+		success = &parsed
+	}
+
+	items, err := h.keyStore.ExportTenantRequestLogs(c.Request.Context(), claims.TenantID, entity.ListRequestLogsInput{
+		ModelPublicName: strings.TrimSpace(c.Query("model_public_name")),
+		Success:         success,
+		HTTPStatus:      httpStatus,
+		TraceID:         strings.TrimSpace(c.Query("trace_id")),
+		CreatedFrom:     createdFrom,
+		CreatedTo:       createdTo,
+	})
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "database_error", err.Error())
+		return
+	}
+
+	buffer := bytes.NewBuffer(nil)
+	writer := csv.NewWriter(buffer)
+	_ = writer.Write([]string{
+		"id",
+		"trace_id",
+		"client_api_key_name",
+		"provider_name",
+		"provider_key_name",
+		"model_public_name",
+		"request_type",
+		"http_status",
+		"success",
+		"latency_ms",
+		"prompt_tokens",
+		"completion_tokens",
+		"total_tokens",
+		"reserved_amount",
+		"cost_amount",
+		"billable_amount",
+		"gross_profit",
+		"error_type",
+		"error_message",
+		"created_at",
+	})
+	for _, item := range items {
+		_ = writer.Write([]string{
+			strconv.FormatInt(item.ID, 10),
+			item.TraceID,
+			item.ClientAPIKeyName,
+			item.ProviderName,
+			item.ProviderKeyName,
+			item.ModelPublicName,
+			item.RequestType,
+			strconv.Itoa(item.HTTPStatus),
+			strconv.FormatBool(item.Success),
+			strconv.Itoa(item.LatencyMS),
+			strconv.Itoa(item.PromptTokens),
+			strconv.Itoa(item.CompletionTokens),
+			strconv.Itoa(item.TotalTokens),
+			strconv.FormatFloat(item.ReservedAmount, 'f', 8, 64),
+			strconv.FormatFloat(item.CostAmount, 'f', 8, 64),
+			strconv.FormatFloat(item.BillableAmount, 'f', 8, 64),
+			strconv.FormatFloat(item.BillableAmount-item.CostAmount, 'f', 8, 64),
+			item.ErrorType,
+			item.ErrorMessage,
+			item.CreatedAt.Format(time.RFC3339),
+		})
+	}
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		writeError(c, http.StatusInternalServerError, "database_error", err.Error())
+		return
+	}
+
+	c.Header("Content-Type", "text/csv; charset=utf-8")
+	c.Header("Content-Disposition", `attachment; filename="portal_billing.csv"`)
+	c.Data(http.StatusOK, "text/csv; charset=utf-8", buffer.Bytes())
 }
 
 func (h *Handler) Logs(c *gin.Context) {

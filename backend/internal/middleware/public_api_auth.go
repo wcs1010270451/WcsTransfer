@@ -1,7 +1,9 @@
 package middleware
 
 import (
+	"encoding/json"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -11,7 +13,7 @@ import (
 
 const clientAPIKeyContextKey = "client_api_key"
 
-func PublicAPIAuth(store repository.ClientAuthStore) gin.HandlerFunc {
+func PublicAPIAuth(store repository.ClientAuthStore, logWriter repository.RequestLogWriter) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if store == nil {
 			c.Next()
@@ -40,6 +42,7 @@ func PublicAPIAuth(store repository.ClientAuthStore) gin.HandlerFunc {
 			return
 		}
 		if clientKey.TenantID > 0 && clientKey.TenantWalletBalance <= 0 {
+			writeAuthRejectionLog(c, logWriter, clientKey, 402, "wallet_empty", "tenant wallet balance is empty")
 			c.AbortWithStatusJSON(402, gin.H{
 				"error": gin.H{
 					"message": "tenant wallet balance is empty",
@@ -48,10 +51,52 @@ func PublicAPIAuth(store repository.ClientAuthStore) gin.HandlerFunc {
 			})
 			return
 		}
+		if clientKey.TenantID > 0 && clientKey.TenantWalletBalance < clientKey.TenantMinAvailableBalance {
+			writeAuthRejectionLog(c, logWriter, clientKey, 402, "wallet_below_minimum", "tenant wallet balance is below the minimum available balance")
+			c.AbortWithStatusJSON(402, gin.H{
+				"error": gin.H{
+					"message": "tenant wallet balance is below the minimum available balance",
+					"type":    "wallet_below_minimum",
+				},
+			})
+			return
+		}
 
 		c.Set(clientAPIKeyContextKey, clientKey)
 		c.Next()
 	}
+}
+
+func writeAuthRejectionLog(c *gin.Context, logWriter repository.RequestLogWriter, clientKey entity.ClientAPIKey, httpStatus int, errorType string, message string) {
+	if logWriter == nil {
+		return
+	}
+
+	startedAt := time.Now()
+	latencyMS := int(time.Since(startedAt).Milliseconds())
+	metadata, _ := json.Marshal(map[string]any{
+		"tenant_id":                    clientKey.TenantID,
+		"tenant_name":                  clientKey.TenantName,
+		"tenant_wallet_balance":        clientKey.TenantWalletBalance,
+		"tenant_min_available_balance": clientKey.TenantMinAvailableBalance,
+		"client_api_key_name":          clientKey.Name,
+	})
+	_, _ = logWriter.CreateRequestLog(c.Request.Context(), entity.CreateRequestLogInput{
+		TraceID:         strings.TrimSpace(c.Writer.Header().Get("X-Request-Id")),
+		RequestType:     "auth_reject",
+		ClientAPIKeyID:  clientKey.ID,
+		ClientIP:        c.ClientIP(),
+		RequestMethod:   c.Request.Method,
+		RequestPath:     c.FullPath(),
+		HTTPStatus:      httpStatus,
+		Success:         false,
+		LatencyMS:       latencyMS,
+		ErrorType:       errorType,
+		ErrorMessage:    message,
+		RequestPayload:  nil,
+		ResponsePayload: nil,
+		Metadata:        metadata,
+	})
 }
 
 func extractClientAPIKey(c *gin.Context) string {

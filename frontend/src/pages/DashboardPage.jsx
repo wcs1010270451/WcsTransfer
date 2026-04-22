@@ -4,6 +4,10 @@ import MetricCard from "../components/MetricCard";
 import PageHeaderCard from "../components/PageHeaderCard";
 import { fetchHealth, fetchLogs, fetchStats } from "../api/client";
 
+function formatCurrency(value) {
+  return `$${Number(value || 0).toFixed(4)}`;
+}
+
 export default function DashboardPage() {
   const [state, setState] = useState({
     loading: true,
@@ -50,8 +54,8 @@ export default function DashboardPage() {
     <Space direction="vertical" size={24} style={{ width: "100%" }}>
       <PageHeaderCard
         eyebrow="网关总览"
-        title="集中查看网关健康度、流量质量和资源状态"
-        description="这里汇总最近 24 小时的请求活动、资源数量和最新流量情况，方便快速判断网关是否稳定。"
+        title="集中查看网关健康度、流量质量和账单摘要"
+        description="这里汇总最近 24 小时的请求情况、今日与本月账单，以及最新请求状态。"
       />
 
       {state.error ? <Alert type="error" showIcon message={state.error} /> : null}
@@ -68,6 +72,27 @@ export default function DashboardPage() {
         </Col>
         <Col xs={24} md={12} xl={6}>
           <MetricCard title="客户端密钥" value={state.stats?.active_client_key_count ?? 0} hint={`总数 ${state.stats?.client_key_count ?? 0}，活跃 ${state.stats?.active_client_key_count ?? 0}`} />
+        </Col>
+      </Row>
+
+      <Row gutter={[18, 18]}>
+        <Col xs={24} md={12} xl={4}>
+          <MetricCard title="今日收入" value={formatCurrency(state.stats?.today_billable_amount)} hint="按今日请求计费汇总" />
+        </Col>
+        <Col xs={24} md={12} xl={4}>
+          <MetricCard title="今日成本" value={formatCurrency(state.stats?.today_cost_amount)} hint="今日上游成本汇总" />
+        </Col>
+        <Col xs={24} md={12} xl={4}>
+          <MetricCard title="今日毛利" value={formatCurrency(state.stats?.today_gross_profit)} hint="今日收入减成本" />
+        </Col>
+        <Col xs={24} md={12} xl={4}>
+          <MetricCard title="本月收入" value={formatCurrency(state.stats?.month_billable_amount)} hint="按自然月汇总" />
+        </Col>
+        <Col xs={24} md={12} xl={4}>
+          <MetricCard title="本月成本" value={formatCurrency(state.stats?.month_cost_amount)} hint="本月上游成本" />
+        </Col>
+        <Col xs={24} md={12} xl={4}>
+          <MetricCard title="本月毛利" value={formatCurrency(state.stats?.month_gross_profit)} hint="本月收入减成本" />
         </Col>
       </Row>
 
@@ -118,12 +143,21 @@ export default function DashboardPage() {
               </div>
               <div className="log-list-item">
                 <div>
-                  <Typography.Text strong>预估成本</Typography.Text>
+                  <Typography.Text strong>窗口收入</Typography.Text>
                   <Typography.Paragraph type="secondary" className="log-subtitle">
-                    汇总自 request_logs.estimated_cost
+                    最近统计窗口内的对客计费
                   </Typography.Paragraph>
                 </div>
-                <Typography.Text>${Number(state.stats?.billable_amount ?? 0).toFixed(4)}</Typography.Text>
+                <Typography.Text>{formatCurrency(state.stats?.billable_amount)}</Typography.Text>
+              </div>
+              <div className="log-list-item">
+                <div>
+                  <Typography.Text strong>窗口毛利</Typography.Text>
+                  <Typography.Paragraph type="secondary" className="log-subtitle">
+                    最近统计窗口内的收入减成本
+                  </Typography.Paragraph>
+                </div>
+                <Typography.Text>{formatCurrency(state.stats?.gross_profit)}</Typography.Text>
               </div>
             </Space>
           </section>

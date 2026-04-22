@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"time"
 
 	"wcstransfer/backend/internal/entity"
 )
@@ -11,8 +12,14 @@ type AdminStore interface {
 	CreateProvider(ctx context.Context, input entity.CreateProviderInput) (entity.Provider, error)
 	UpdateProvider(ctx context.Context, input entity.UpdateProviderInput) (entity.Provider, error)
 	ListTenants(ctx context.Context) ([]entity.Tenant, error)
+	CreateTenant(ctx context.Context, input entity.CreateTenantInput) (entity.Tenant, error)
 	UpdateTenant(ctx context.Context, input entity.UpdateTenantInput) (entity.Tenant, error)
+	ListTenantUsers(ctx context.Context, tenantID int64) ([]entity.TenantUser, error)
+	CreateTenantUser(ctx context.Context, input entity.CreateTenantUserInput) (entity.TenantUser, error)
+	UpdateTenantUserStatus(ctx context.Context, input entity.UpdateTenantUserStatusInput) (entity.TenantUser, error)
+	ResetTenantUserPassword(ctx context.Context, input entity.ResetTenantUserPasswordInput) error
 	AdjustTenantWallet(ctx context.Context, input entity.TenantWalletAdjustmentInput) (entity.Tenant, error)
+	CorrectTenantWallet(ctx context.Context, input entity.TenantWalletCorrectionInput) (entity.Tenant, error)
 	ListTenantWalletLedger(ctx context.Context, tenantID int64, page int, pageSize int) (entity.TenantWalletLedgerPage, error)
 	ListClientAPIKeys(ctx context.Context) ([]entity.ClientAPIKey, error)
 	CreateClientAPIKey(ctx context.Context, input entity.CreateClientAPIKeyInput) (entity.ClientAPIKey, error)
@@ -27,6 +34,18 @@ type AdminStore interface {
 	GetRequestLog(ctx context.Context, id int64) (entity.RequestLogDetail, error)
 	ExportRequestLogs(ctx context.Context, input entity.ListRequestLogsInput) ([]entity.RequestLog, error)
 	GetDashboardStats(ctx context.Context) (entity.DashboardStats, error)
+	ExportTenantRequestLogs(ctx context.Context, tenantID int64, input entity.ListRequestLogsInput) ([]entity.RequestLog, error)
+	CreateAdminActionLog(ctx context.Context, input entity.CreateAdminActionLogInput) error
+	GetTenantBillingReconciliation(ctx context.Context) ([]entity.TenantBillingReconciliation, error)
+	GetProviderRequestAnomalies(ctx context.Context, since time.Time, minRequests int, rateLimitedThreshold float64, serverErrorThreshold float64) ([]entity.ProviderRequestAnomaly, error)
+	GetTenantWalletBlockAnomalies(ctx context.Context, since time.Time, walletBlockThreshold int, reserveBlockThreshold int) ([]entity.TenantWalletBlockAnomaly, error)
+	GetTenantBillingDebitAnomalies(ctx context.Context, since time.Time, minCount int, minBillableAmount float64) ([]entity.TenantBillingDebitAnomaly, error)
+}
+
+type AdminAuthStore interface {
+	AuthenticateAdminUser(ctx context.Context, username string, password string) (entity.AdminUser, error)
+	UpdateAdminUserLastLogin(ctx context.Context, userID int64) error
+	GetAdminUserByID(ctx context.Context, userID int64) (entity.AdminUser, error)
 }
 
 type TenantAuthStore interface {
@@ -45,12 +64,13 @@ type TenantClientKeyStore interface {
 	ListTenantWalletLedger(ctx context.Context, tenantID int64, page int, pageSize int) (entity.TenantWalletLedgerPage, error)
 	ListTenantRequestLogs(ctx context.Context, tenantID int64, input entity.ListRequestLogsInput) (entity.RequestLogPage, error)
 	GetTenantRequestLog(ctx context.Context, tenantID int64, id int64) (entity.RequestLogDetail, error)
+	ExportTenantRequestLogs(ctx context.Context, tenantID int64, input entity.ListRequestLogsInput) ([]entity.RequestLog, error)
 	ListTenantModels(ctx context.Context, tenantID int64) ([]entity.Model, error)
 }
 
 type RequestLogWriter interface {
-	CreateRequestLog(ctx context.Context, input entity.CreateRequestLogInput) error
-	DeductTenantWalletUsage(ctx context.Context, clientAPIKeyID int64, amount float64, note string) error
+	CreateRequestLog(ctx context.Context, input entity.CreateRequestLogInput) (int64, error)
+	DeductTenantWalletUsage(ctx context.Context, input entity.TenantWalletUsageDebitInput) error
 }
 
 type PublicModelStore interface {

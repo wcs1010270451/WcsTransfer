@@ -41,23 +41,25 @@ type ProviderKey struct {
 }
 
 type Model struct {
-	ID               int64           `json:"id"`
-	PublicName       string          `json:"public_name"`
-	ProviderID       int64           `json:"provider_id"`
-	ProviderName     string          `json:"provider_name"`
-	UpstreamModel    string          `json:"upstream_model"`
-	RouteStrategy    string          `json:"route_strategy"`
-	IsEnabled        bool            `json:"is_enabled"`
-	MaxTokens        int             `json:"max_tokens"`
-	Temperature      float64         `json:"temperature"`
-	TimeoutSeconds   int             `json:"timeout_seconds"`
-	CostInputPer1M   float64         `json:"cost_input_per_1m"`
-	CostOutputPer1M  float64         `json:"cost_output_per_1m"`
-	SaleInputPer1M   float64         `json:"sale_input_per_1m"`
-	SaleOutputPer1M  float64         `json:"sale_output_per_1m"`
-	Metadata         json.RawMessage `json:"metadata"`
-	CreatedAt        time.Time       `json:"created_at"`
-	UpdatedAt        time.Time       `json:"updated_at"`
+	ID                int64           `json:"id"`
+	PublicName        string          `json:"public_name"`
+	ProviderID        int64           `json:"provider_id"`
+	ProviderName      string          `json:"provider_name"`
+	UpstreamModel     string          `json:"upstream_model"`
+	RouteStrategy     string          `json:"route_strategy"`
+	IsEnabled         bool            `json:"is_enabled"`
+	MaxTokens         int             `json:"max_tokens"`
+	Temperature       float64         `json:"temperature"`
+	TimeoutSeconds    int             `json:"timeout_seconds"`
+	CostInputPer1M    float64         `json:"cost_input_per_1m"`
+	CostOutputPer1M   float64         `json:"cost_output_per_1m"`
+	SaleInputPer1M    float64         `json:"sale_input_per_1m"`
+	SaleOutputPer1M   float64         `json:"sale_output_per_1m"`
+	ReserveMultiplier float64         `json:"reserve_multiplier"`
+	ReserveMinAmount  float64         `json:"reserve_min_amount"`
+	Metadata          json.RawMessage `json:"metadata"`
+	CreatedAt         time.Time       `json:"created_at"`
+	UpdatedAt         time.Time       `json:"updated_at"`
 }
 
 type ModelRoute struct {
@@ -67,56 +69,65 @@ type ModelRoute struct {
 }
 
 type ClientAPIKey struct {
-	ID                  int64             `json:"id"`
-	TenantID            int64             `json:"tenant_id"`
-	TenantName          string            `json:"tenant_name,omitempty"`
-	TenantWalletBalance float64           `json:"tenant_wallet_balance,omitempty"`
-	Name                string            `json:"name"`
-	MaskedKey           string            `json:"masked_key"`
-	PlainAPIKey         string            `json:"plain_api_key,omitempty"`
-	Status              string            `json:"status"`
-	Description         string            `json:"description"`
-	RPMLimit            int               `json:"rpm_limit"`
-	DailyRequestLimit   int               `json:"daily_request_limit"`
-	DailyTokenLimit     int               `json:"daily_token_limit"`
-	DailyCostLimit      float64           `json:"daily_cost_limit"`
-	MonthlyCostLimit    float64           `json:"monthly_cost_limit"`
-	WarningThreshold    float64           `json:"warning_threshold"`
-	AllowedModelIDs     []int64           `json:"allowed_model_ids"`
-	AllowedModels       []string          `json:"allowed_models"`
-	Usage               *ClientQuotaUsage `json:"usage,omitempty"`
-	CostUsage           *ClientCostUsage  `json:"cost_usage,omitempty"`
-	ExpiresAt           *time.Time        `json:"expires_at,omitempty"`
-	LastUsedAt          *time.Time        `json:"last_used_at,omitempty"`
-	LastErrorAt         *time.Time        `json:"last_error_at,omitempty"`
-	LastErrorMessage    string            `json:"last_error_message"`
-	CreatedAt           time.Time         `json:"created_at"`
-	UpdatedAt           time.Time         `json:"updated_at"`
+	ID                        int64             `json:"id"`
+	TenantID                  int64             `json:"tenant_id"`
+	TenantName                string            `json:"tenant_name,omitempty"`
+	TenantWalletBalance       float64           `json:"tenant_wallet_balance,omitempty"`
+	TenantMinAvailableBalance float64           `json:"tenant_min_available_balance,omitempty"`
+	Name                      string            `json:"name"`
+	MaskedKey                 string            `json:"masked_key"`
+	PlainAPIKey               string            `json:"plain_api_key,omitempty"`
+	Status                    string            `json:"status"`
+	Description               string            `json:"description"`
+	RPMLimit                  int               `json:"rpm_limit"`
+	DailyRequestLimit         int               `json:"daily_request_limit"`
+	DailyTokenLimit           int               `json:"daily_token_limit"`
+	DailyCostLimit            float64           `json:"daily_cost_limit"`
+	MonthlyCostLimit          float64           `json:"monthly_cost_limit"`
+	WarningThreshold          float64           `json:"warning_threshold"`
+	AllowedModelIDs           []int64           `json:"allowed_model_ids"`
+	AllowedModels             []string          `json:"allowed_models"`
+	Usage                     *ClientQuotaUsage `json:"usage,omitempty"`
+	CostUsage                 *ClientCostUsage  `json:"cost_usage,omitempty"`
+	ExpiresAt                 *time.Time        `json:"expires_at,omitempty"`
+	LastUsedAt                *time.Time        `json:"last_used_at,omitempty"`
+	LastErrorAt               *time.Time        `json:"last_error_at,omitempty"`
+	LastErrorMessage          string            `json:"last_error_message"`
+	CreatedAt                 time.Time         `json:"created_at"`
+	UpdatedAt                 time.Time         `json:"updated_at"`
 }
 
 type Tenant struct {
-	ID            int64     `json:"id"`
-	Name          string    `json:"name"`
-	Slug          string    `json:"slug"`
-	Status        string    `json:"status"`
-	MaxClientKeys int       `json:"max_client_keys"`
-	WalletBalance float64   `json:"wallet_balance"`
-	Notes         string    `json:"notes"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID                  int64     `json:"id"`
+	Name                string    `json:"name"`
+	Slug                string    `json:"slug"`
+	Status              string    `json:"status"`
+	MaxClientKeys       int       `json:"max_client_keys"`
+	WalletBalance       float64   `json:"wallet_balance"`
+	MinAvailableBalance float64   `json:"min_available_balance"`
+	Notes               string    `json:"notes"`
+	CreatedAt           time.Time `json:"created_at"`
+	UpdatedAt           time.Time `json:"updated_at"`
 }
 
 type TenantWalletLedgerEntry struct {
-	ID            int64     `json:"id"`
-	TenantID      int64     `json:"tenant_id"`
-	Direction     string    `json:"direction"`
-	Amount        float64   `json:"amount"`
-	BalanceBefore float64   `json:"balance_before"`
-	BalanceAfter  float64   `json:"balance_after"`
-	Note          string    `json:"note"`
-	OperatorType  string    `json:"operator_type"`
-	OperatorUserID int64    `json:"operator_user_id"`
-	CreatedAt     time.Time `json:"created_at"`
+	ID              int64     `json:"id"`
+	TenantID        int64     `json:"tenant_id"`
+	Direction       string    `json:"direction"`
+	Amount          float64   `json:"amount"`
+	BalanceBefore   float64   `json:"balance_before"`
+	BalanceAfter    float64   `json:"balance_after"`
+	Note            string    `json:"note"`
+	OperatorType    string    `json:"operator_type"`
+	OperatorUserID  int64     `json:"operator_user_id"`
+	RequestLogID    int64     `json:"request_log_id"`
+	TraceID         string    `json:"trace_id"`
+	ModelPublicName string    `json:"model_public_name"`
+	TotalTokens     int64     `json:"total_tokens"`
+	ReservedAmount  float64   `json:"reserved_amount"`
+	CostAmount      float64   `json:"cost_amount"`
+	BillableAmount  float64   `json:"billable_amount"`
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 type TenantWalletLedgerPage struct {
@@ -133,6 +144,25 @@ type TenantWalletAdjustmentInput struct {
 	OperatorID int64
 }
 
+type TenantWalletCorrectionInput struct {
+	TenantID   int64
+	Amount     float64
+	Note       string
+	OperatorID int64
+}
+
+type TenantWalletUsageDebitInput struct {
+	ClientAPIKeyID  int64
+	RequestLogID    int64
+	TraceID         string
+	ModelPublicName string
+	TotalTokens     int
+	ReservedAmount  float64
+	CostAmount      float64
+	BillableAmount  float64
+	Note            string
+}
+
 type TenantUser struct {
 	ID          int64      `json:"id"`
 	TenantID    int64      `json:"tenant_id"`
@@ -143,6 +173,53 @@ type TenantUser struct {
 	LastLoginAt *time.Time `json:"last_login_at,omitempty"`
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
+}
+
+type AdminUser struct {
+	ID          int64      `json:"id"`
+	Username    string     `json:"username"`
+	DisplayName string     `json:"display_name"`
+	Status      string     `json:"status"`
+	LastLoginAt *time.Time `json:"last_login_at,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+}
+
+type AdminLoginResult struct {
+	User  AdminUser `json:"user"`
+	Token string    `json:"token"`
+}
+
+type AdminActionLog struct {
+	ID               int64           `json:"id"`
+	AdminUserID      int64           `json:"admin_user_id"`
+	AdminUsername    string          `json:"admin_username"`
+	AdminDisplayName string          `json:"admin_display_name"`
+	AuthMode         string          `json:"auth_mode"`
+	Action           string          `json:"action"`
+	ResourceType     string          `json:"resource_type"`
+	ResourceID       int64           `json:"resource_id"`
+	ResourceName     string          `json:"resource_name"`
+	RequestMethod    string          `json:"request_method"`
+	RequestPath      string          `json:"request_path"`
+	ClientIP         string          `json:"client_ip"`
+	Metadata         json.RawMessage `json:"metadata"`
+	CreatedAt        time.Time       `json:"created_at"`
+}
+
+type CreateAdminActionLogInput struct {
+	AdminUserID      int64
+	AdminUsername    string
+	AdminDisplayName string
+	AuthMode         string
+	Action           string
+	ResourceType     string
+	ResourceID       int64
+	ResourceName     string
+	RequestMethod    string
+	RequestPath      string
+	ClientIP         string
+	Metadata         json.RawMessage
 }
 
 type TenantLoginResult struct {
@@ -202,6 +279,7 @@ type RequestLog struct {
 	PromptTokens     int       `json:"prompt_tokens"`
 	CompletionTokens int       `json:"completion_tokens"`
 	TotalTokens      int       `json:"total_tokens"`
+	ReservedAmount   float64   `json:"reserved_amount"`
 	CostAmount       float64   `json:"cost_amount"`
 	BillableAmount   float64   `json:"billable_amount"`
 	ErrorType        string    `json:"error_type"`
@@ -247,6 +325,13 @@ type TenantPortalStats struct {
 	TotalTokens      int64   `json:"total_tokens"`
 	CostAmount       float64 `json:"cost_amount"`
 	BillableAmount   float64 `json:"billable_amount"`
+	GrossProfit      float64 `json:"gross_profit"`
+	TodayCostAmount  float64 `json:"today_cost_amount"`
+	TodayBillable    float64 `json:"today_billable_amount"`
+	TodayGrossProfit float64 `json:"today_gross_profit"`
+	MonthCostAmount  float64 `json:"month_cost_amount"`
+	MonthBillable    float64 `json:"month_billable_amount"`
+	MonthGrossProfit float64 `json:"month_gross_profit"`
 	ClientKeyCount   int64   `json:"client_key_count"`
 	ActiveClientKeys int64   `json:"active_client_keys"`
 }
@@ -270,11 +355,64 @@ type DashboardStats struct {
 	TotalTokens          int64                  `json:"total_tokens"`
 	CostAmount           float64                `json:"cost_amount"`
 	BillableAmount       float64                `json:"billable_amount"`
+	GrossProfit          float64                `json:"gross_profit"`
+	TodayCostAmount      float64                `json:"today_cost_amount"`
+	TodayBillableAmount  float64                `json:"today_billable_amount"`
+	TodayGrossProfit     float64                `json:"today_gross_profit"`
+	MonthCostAmount      float64                `json:"month_cost_amount"`
+	MonthBillableAmount  float64                `json:"month_billable_amount"`
+	MonthGrossProfit     float64                `json:"month_gross_profit"`
 	TopModels            []ModelUsageStat       `json:"top_models"`
 	TopProviders         []ProviderUsageStat    `json:"top_providers"`
 	TopClients           []ClientUsageStat      `json:"top_clients"`
 	QuotaPressure        []ClientQuotaPressure  `json:"quota_pressure"`
 	BudgetPressure       []ClientBudgetPressure `json:"budget_pressure"`
+}
+
+type TenantBillingReconciliation struct {
+	TenantID           int64   `json:"tenant_id"`
+	TenantName         string  `json:"tenant_name"`
+	WalletBalance      float64 `json:"wallet_balance"`
+	LedgerCreditAmount float64 `json:"ledger_credit_amount"`
+	LedgerDebitAmount  float64 `json:"ledger_debit_amount"`
+	LedgerNetAmount    float64 `json:"ledger_net_amount"`
+	LogBillableAmount  float64 `json:"log_billable_amount"`
+	LogCostAmount      float64 `json:"log_cost_amount"`
+	WalletVsLedgerDiff float64 `json:"wallet_vs_ledger_diff"`
+	LedgerVsLogsDiff   float64 `json:"ledger_vs_logs_diff"`
+	IsWalletBalanced   bool    `json:"is_wallet_balanced"`
+	IsBillingBalanced  bool    `json:"is_billing_balanced"`
+}
+
+type ProviderRequestAnomaly struct {
+	ProviderID             int64   `json:"provider_id"`
+	ProviderName           string  `json:"provider_name"`
+	TotalRequests          int64   `json:"total_requests"`
+	RateLimitedCount       int64   `json:"rate_limited_count"`
+	ServerErrorCount       int64   `json:"server_error_count"`
+	RateLimitedRatio       float64 `json:"rate_limited_ratio"`
+	ServerErrorRatio       float64 `json:"server_error_ratio"`
+	IsRateLimitedAnomalous bool    `json:"is_rate_limited_anomalous"`
+	IsServerErrorAnomalous bool    `json:"is_server_error_anomalous"`
+}
+
+type TenantWalletBlockAnomaly struct {
+	TenantID                  int64  `json:"tenant_id"`
+	TenantName                string `json:"tenant_name"`
+	WalletBlockedCount        int64  `json:"wallet_blocked_count"`
+	ReserveBlockedCount       int64  `json:"reserve_blocked_count"`
+	IsWalletBlockedAnomalous  bool   `json:"is_wallet_blocked_anomalous"`
+	IsReserveBlockedAnomalous bool   `json:"is_reserve_blocked_anomalous"`
+}
+
+type TenantBillingDebitAnomaly struct {
+	TenantID                  int64   `json:"tenant_id"`
+	TenantName                string  `json:"tenant_name"`
+	MissingDebitCount         int64   `json:"missing_debit_count"`
+	MissingBillableAmount     float64 `json:"missing_billable_amount"`
+	MissingCostAmount         float64 `json:"missing_cost_amount"`
+	IsCountAnomalous          bool    `json:"is_count_anomalous"`
+	IsBillableAmountAnomalous bool    `json:"is_billable_amount_anomalous"`
 }
 
 type ModelUsageStat struct {
@@ -348,6 +486,7 @@ type CreateRequestLogInput struct {
 	PromptTokens     int
 	CompletionTokens int
 	TotalTokens      int
+	ReservedAmount   float64
 	CostAmount       float64
 	BillableAmount   float64
 	ErrorType        string
@@ -397,13 +536,44 @@ type RegisterTenantUserInput struct {
 	FullName   string
 }
 
+type CreateTenantUserInput struct {
+	TenantID  int64
+	Email     string
+	Password  string
+	FullName  string
+	Status    string
+	CreatedBy int64
+}
+
+type UpdateTenantUserStatusInput struct {
+	TenantID int64
+	UserID   int64
+	Status   string
+}
+
+type ResetTenantUserPasswordInput struct {
+	TenantID int64
+	UserID   int64
+	Password string
+}
+
 type UpdateTenantInput struct {
-	ID            int64
-	Name          string
-	Slug          string
-	Status        string
-	MaxClientKeys int
-	Notes         string
+	ID                  int64
+	Name                string
+	Slug                string
+	Status              string
+	MaxClientKeys       int
+	MinAvailableBalance float64
+	Notes               string
+}
+
+type CreateTenantInput struct {
+	Name                string
+	Slug                string
+	Status              string
+	MaxClientKeys       int
+	MinAvailableBalance float64
+	Notes               string
 }
 
 type TenantClientKeyInput struct {
@@ -457,34 +627,38 @@ type UpdateProviderKeyInput struct {
 }
 
 type CreateModelInput struct {
-	PublicName      string
-	ProviderID      int64
-	UpstreamModel   string
-	RouteStrategy   string
-	IsEnabled       bool
-	MaxTokens       int
-	Temperature     float64
-	TimeoutSeconds  int
-	CostInputPer1M  float64
-	CostOutputPer1M float64
-	SaleInputPer1M  float64
-	SaleOutputPer1M float64
-	Metadata        json.RawMessage
+	PublicName        string
+	ProviderID        int64
+	UpstreamModel     string
+	RouteStrategy     string
+	IsEnabled         bool
+	MaxTokens         int
+	Temperature       float64
+	TimeoutSeconds    int
+	CostInputPer1M    float64
+	CostOutputPer1M   float64
+	SaleInputPer1M    float64
+	SaleOutputPer1M   float64
+	ReserveMultiplier float64
+	ReserveMinAmount  float64
+	Metadata          json.RawMessage
 }
 
 type UpdateModelInput struct {
-	ID              int64
-	PublicName      string
-	ProviderID      int64
-	UpstreamModel   string
-	RouteStrategy   string
-	IsEnabled       bool
-	MaxTokens       int
-	Temperature     float64
-	TimeoutSeconds  int
-	CostInputPer1M  float64
-	CostOutputPer1M float64
-	SaleInputPer1M  float64
-	SaleOutputPer1M float64
-	Metadata        json.RawMessage
+	ID                int64
+	PublicName        string
+	ProviderID        int64
+	UpstreamModel     string
+	RouteStrategy     string
+	IsEnabled         bool
+	MaxTokens         int
+	Temperature       float64
+	TimeoutSeconds    int
+	CostInputPer1M    float64
+	CostOutputPer1M   float64
+	SaleInputPer1M    float64
+	SaleOutputPer1M   float64
+	ReserveMultiplier float64
+	ReserveMinAmount  float64
+	Metadata          json.RawMessage
 }

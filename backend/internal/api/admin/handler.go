@@ -18,6 +18,7 @@ import (
 
 	"wcstransfer/backend/internal/entity"
 	"wcstransfer/backend/internal/repository"
+	adminauthsvc "wcstransfer/backend/internal/service/adminauth"
 	"wcstransfer/backend/internal/service/clientquota"
 	"wcstransfer/backend/internal/service/keyhealth"
 )
@@ -26,6 +27,13 @@ type Handler struct {
 	store     repository.AdminStore
 	keyHealth *keyhealth.Tracker
 	quota     *clientquota.Service
+}
+
+type adminActor struct {
+	UserID      int64
+	Username    string
+	DisplayName string
+	AuthMode    string
 }
 
 type createProviderRequest struct {
@@ -49,16 +57,46 @@ type updateProviderRequest struct {
 }
 
 type updateTenantRequest struct {
-	Name          string `json:"name" binding:"required"`
-	Slug          string `json:"slug" binding:"required"`
-	Status        string `json:"status" binding:"required"`
-	MaxClientKeys int    `json:"max_client_keys"`
-	Notes         string `json:"notes"`
+	Name                string  `json:"name" binding:"required"`
+	Slug                string  `json:"slug" binding:"required"`
+	Status              string  `json:"status" binding:"required"`
+	MaxClientKeys       int     `json:"max_client_keys"`
+	MinAvailableBalance float64 `json:"min_available_balance"`
+	Notes               string  `json:"notes"`
+}
+
+type createTenantRequest struct {
+	Name                string  `json:"name" binding:"required"`
+	Slug                string  `json:"slug" binding:"required"`
+	Status              string  `json:"status"`
+	MaxClientKeys       int     `json:"max_client_keys"`
+	MinAvailableBalance float64 `json:"min_available_balance"`
+	Notes               string  `json:"notes"`
 }
 
 type adjustTenantWalletRequest struct {
 	Amount float64 `json:"amount" binding:"required"`
 	Note   string  `json:"note"`
+}
+
+type correctTenantWalletRequest struct {
+	Amount float64 `json:"amount" binding:"required"`
+	Note   string  `json:"note" binding:"required"`
+}
+
+type createTenantUserRequest struct {
+	Email    string `json:"email" binding:"required"`
+	Password string `json:"password" binding:"required"`
+	FullName string `json:"full_name" binding:"required"`
+	Status   string `json:"status"`
+}
+
+type updateTenantUserStatusRequest struct {
+	Status string `json:"status" binding:"required"`
+}
+
+type resetTenantUserPasswordRequest struct {
+	Password string `json:"password" binding:"required"`
 }
 
 type createClientAPIKeyRequest struct {
@@ -112,35 +150,39 @@ type updateProviderKeyRequest struct {
 }
 
 type createModelRequest struct {
-	PublicName      string          `json:"public_name" binding:"required"`
-	ProviderID      int64           `json:"provider_id" binding:"required"`
-	UpstreamModel   string          `json:"upstream_model" binding:"required"`
-	RouteStrategy   string          `json:"route_strategy"`
-	IsEnabled       *bool           `json:"is_enabled"`
-	MaxTokens       int             `json:"max_tokens"`
-	Temperature     float64         `json:"temperature"`
-	TimeoutSeconds  *int            `json:"timeout_seconds"`
-	CostInputPer1M  float64         `json:"cost_input_per_1m"`
-	CostOutputPer1M float64         `json:"cost_output_per_1m"`
-	SaleInputPer1M  float64         `json:"sale_input_per_1m"`
-	SaleOutputPer1M float64         `json:"sale_output_per_1m"`
-	Metadata        json.RawMessage `json:"metadata"`
+	PublicName        string          `json:"public_name" binding:"required"`
+	ProviderID        int64           `json:"provider_id" binding:"required"`
+	UpstreamModel     string          `json:"upstream_model" binding:"required"`
+	RouteStrategy     string          `json:"route_strategy"`
+	IsEnabled         *bool           `json:"is_enabled"`
+	MaxTokens         int             `json:"max_tokens"`
+	Temperature       float64         `json:"temperature"`
+	TimeoutSeconds    *int            `json:"timeout_seconds"`
+	CostInputPer1M    float64         `json:"cost_input_per_1m"`
+	CostOutputPer1M   float64         `json:"cost_output_per_1m"`
+	SaleInputPer1M    float64         `json:"sale_input_per_1m"`
+	SaleOutputPer1M   float64         `json:"sale_output_per_1m"`
+	ReserveMultiplier float64         `json:"reserve_multiplier"`
+	ReserveMinAmount  float64         `json:"reserve_min_amount"`
+	Metadata          json.RawMessage `json:"metadata"`
 }
 
 type updateModelRequest struct {
-	PublicName      string          `json:"public_name" binding:"required"`
-	ProviderID      int64           `json:"provider_id" binding:"required"`
-	UpstreamModel   string          `json:"upstream_model" binding:"required"`
-	RouteStrategy   string          `json:"route_strategy"`
-	IsEnabled       *bool           `json:"is_enabled"`
-	MaxTokens       int             `json:"max_tokens"`
-	Temperature     float64         `json:"temperature"`
-	TimeoutSeconds  *int            `json:"timeout_seconds"`
-	CostInputPer1M  float64         `json:"cost_input_per_1m"`
-	CostOutputPer1M float64         `json:"cost_output_per_1m"`
-	SaleInputPer1M  float64         `json:"sale_input_per_1m"`
-	SaleOutputPer1M float64         `json:"sale_output_per_1m"`
-	Metadata        json.RawMessage `json:"metadata"`
+	PublicName        string          `json:"public_name" binding:"required"`
+	ProviderID        int64           `json:"provider_id" binding:"required"`
+	UpstreamModel     string          `json:"upstream_model" binding:"required"`
+	RouteStrategy     string          `json:"route_strategy"`
+	IsEnabled         *bool           `json:"is_enabled"`
+	MaxTokens         int             `json:"max_tokens"`
+	Temperature       float64         `json:"temperature"`
+	TimeoutSeconds    *int            `json:"timeout_seconds"`
+	CostInputPer1M    float64         `json:"cost_input_per_1m"`
+	CostOutputPer1M   float64         `json:"cost_output_per_1m"`
+	SaleInputPer1M    float64         `json:"sale_input_per_1m"`
+	SaleOutputPer1M   float64         `json:"sale_output_per_1m"`
+	ReserveMultiplier float64         `json:"reserve_multiplier"`
+	ReserveMinAmount  float64         `json:"reserve_min_amount"`
+	Metadata          json.RawMessage `json:"metadata"`
 }
 
 func NewHandler(store repository.AdminStore, tracker *keyhealth.Tracker, quota *clientquota.Service) *Handler {
@@ -183,6 +225,40 @@ func (h *Handler) ListTenants(c *gin.Context) {
 	})
 }
 
+func (h *Handler) CreateTenant(c *gin.Context) {
+	if h.store == nil {
+		writeServiceUnavailable(c)
+		return
+	}
+
+	var request createTenantRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		writeBadRequest(c, "invalid request body")
+		return
+	}
+
+	item, err := h.store.CreateTenant(c.Request.Context(), entity.CreateTenantInput{
+		Name:                strings.TrimSpace(request.Name),
+		Slug:                strings.TrimSpace(request.Slug),
+		Status:              defaultString(strings.TrimSpace(request.Status), "pending"),
+		MaxClientKeys:       request.MaxClientKeys,
+		MinAvailableBalance: request.MinAvailableBalance,
+		Notes:               strings.TrimSpace(request.Notes),
+	})
+	if err != nil {
+		writeDatabaseError(c, err)
+		return
+	}
+
+	h.recordAdminAction(c, "tenant.create", "tenant", item.ID, item.Name, gin.H{
+		"status":                item.Status,
+		"max_client_keys":       item.MaxClientKeys,
+		"min_available_balance": item.MinAvailableBalance,
+	})
+
+	c.JSON(http.StatusCreated, item)
+}
+
 func (h *Handler) UpdateTenant(c *gin.Context) {
 	if h.store == nil {
 		writeServiceUnavailable(c)
@@ -201,19 +277,167 @@ func (h *Handler) UpdateTenant(c *gin.Context) {
 	}
 
 	item, err := h.store.UpdateTenant(c.Request.Context(), entity.UpdateTenantInput{
-		ID:            id,
-		Name:          strings.TrimSpace(request.Name),
-		Slug:          strings.TrimSpace(request.Slug),
-		Status:        strings.TrimSpace(request.Status),
-		MaxClientKeys: request.MaxClientKeys,
-		Notes:         strings.TrimSpace(request.Notes),
+		ID:                  id,
+		Name:                strings.TrimSpace(request.Name),
+		Slug:                strings.TrimSpace(request.Slug),
+		Status:              strings.TrimSpace(request.Status),
+		MaxClientKeys:       request.MaxClientKeys,
+		MinAvailableBalance: request.MinAvailableBalance,
+		Notes:               strings.TrimSpace(request.Notes),
 	})
 	if err != nil {
 		writeDatabaseError(c, err)
 		return
 	}
 
+	h.recordAdminAction(c, "tenant.update", "tenant", item.ID, item.Name, gin.H{
+		"status":                item.Status,
+		"max_client_keys":       item.MaxClientKeys,
+		"min_available_balance": item.MinAvailableBalance,
+	})
+
 	c.JSON(http.StatusOK, item)
+}
+
+func (h *Handler) ListTenantUsers(c *gin.Context) {
+	if h.store == nil {
+		writeServiceUnavailable(c)
+		return
+	}
+
+	id, ok := parseResourceID(c)
+	if !ok {
+		return
+	}
+
+	items, err := h.store.ListTenantUsers(c.Request.Context(), id)
+	if err != nil {
+		writeDatabaseError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"items": items,
+		"total": len(items),
+	})
+}
+
+func (h *Handler) CreateTenantUser(c *gin.Context) {
+	if h.store == nil {
+		writeServiceUnavailable(c)
+		return
+	}
+
+	id, ok := parseResourceID(c)
+	if !ok {
+		return
+	}
+
+	var request createTenantUserRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		writeBadRequest(c, "invalid request body")
+		return
+	}
+
+	item, err := h.store.CreateTenantUser(c.Request.Context(), entity.CreateTenantUserInput{
+		TenantID:  id,
+		Email:     strings.TrimSpace(request.Email),
+		Password:  request.Password,
+		FullName:  strings.TrimSpace(request.FullName),
+		Status:    defaultString(strings.TrimSpace(request.Status), "active"),
+		CreatedBy: h.currentAdminActor(c).UserID,
+	})
+	if err != nil {
+		writeDatabaseError(c, err)
+		return
+	}
+
+	h.recordAdminAction(c, "tenant.user.create", "tenant_user", item.ID, item.Email, gin.H{
+		"tenant_id":  item.TenantID,
+		"email":      item.Email,
+		"full_name":  item.FullName,
+		"user_status": item.Status,
+	})
+
+	c.JSON(http.StatusCreated, item)
+}
+
+func (h *Handler) UpdateTenantUserStatus(c *gin.Context) {
+	if h.store == nil {
+		writeServiceUnavailable(c)
+		return
+	}
+
+	tenantID, ok := parseResourceID(c)
+	if !ok {
+		return
+	}
+	userID, err := strconv.ParseInt(strings.TrimSpace(c.Param("userId")), 10, 64)
+	if err != nil || userID <= 0 {
+		writeBadRequest(c, "invalid user id")
+		return
+	}
+
+	var request updateTenantUserStatusRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		writeBadRequest(c, "invalid request body")
+		return
+	}
+
+	item, err := h.store.UpdateTenantUserStatus(c.Request.Context(), entity.UpdateTenantUserStatusInput{
+		TenantID: tenantID,
+		UserID:   userID,
+		Status:   strings.TrimSpace(request.Status),
+	})
+	if err != nil {
+		writeDatabaseError(c, err)
+		return
+	}
+
+	h.recordAdminAction(c, "tenant.user.update_status", "tenant_user", item.ID, item.Email, gin.H{
+		"tenant_id":    item.TenantID,
+		"user_status":  item.Status,
+	})
+
+	c.JSON(http.StatusOK, item)
+}
+
+func (h *Handler) ResetTenantUserPassword(c *gin.Context) {
+	if h.store == nil {
+		writeServiceUnavailable(c)
+		return
+	}
+
+	tenantID, ok := parseResourceID(c)
+	if !ok {
+		return
+	}
+	userID, err := strconv.ParseInt(strings.TrimSpace(c.Param("userId")), 10, 64)
+	if err != nil || userID <= 0 {
+		writeBadRequest(c, "invalid user id")
+		return
+	}
+
+	var request resetTenantUserPasswordRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		writeBadRequest(c, "invalid request body")
+		return
+	}
+
+	if err := h.store.ResetTenantUserPassword(c.Request.Context(), entity.ResetTenantUserPasswordInput{
+		TenantID: tenantID,
+		UserID:   userID,
+		Password: request.Password,
+	}); err != nil {
+		writeDatabaseError(c, err)
+		return
+	}
+
+	h.recordAdminAction(c, "tenant.user.reset_password", "tenant_user", userID, "", gin.H{
+		"tenant_id": tenantID,
+	})
+
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
 func (h *Handler) AdjustTenantWallet(c *gin.Context) {
@@ -238,16 +462,96 @@ func (h *Handler) AdjustTenantWallet(c *gin.Context) {
 	}
 
 	item, err := h.store.AdjustTenantWallet(c.Request.Context(), entity.TenantWalletAdjustmentInput{
-		TenantID: id,
-		Amount:   request.Amount,
-		Note:     strings.TrimSpace(request.Note),
+		TenantID:   id,
+		Amount:     request.Amount,
+		Note:       strings.TrimSpace(request.Note),
+		OperatorID: h.currentAdminActor(c).UserID,
 	})
 	if err != nil {
 		writeDatabaseError(c, err)
 		return
 	}
 
+	h.recordAdminAction(c, "tenant.wallet.credit", "tenant", item.ID, item.Name, gin.H{
+		"amount":         request.Amount,
+		"note":           strings.TrimSpace(request.Note),
+		"wallet_balance": item.WalletBalance,
+	})
+
 	c.JSON(http.StatusOK, item)
+}
+
+func (h *Handler) CorrectTenantWallet(c *gin.Context) {
+	if h.store == nil {
+		writeServiceUnavailable(c)
+		return
+	}
+
+	id, ok := parseResourceID(c)
+	if !ok {
+		return
+	}
+
+	var request correctTenantWalletRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		writeBadRequest(c, "invalid request body")
+		return
+	}
+	if request.Amount == 0 {
+		writeBadRequest(c, "amount must not be zero")
+		return
+	}
+	if strings.TrimSpace(request.Note) == "" {
+		writeBadRequest(c, "note is required")
+		return
+	}
+
+	item, err := h.store.CorrectTenantWallet(c.Request.Context(), entity.TenantWalletCorrectionInput{
+		TenantID:   id,
+		Amount:     request.Amount,
+		Note:       strings.TrimSpace(request.Note),
+		OperatorID: h.currentAdminActor(c).UserID,
+	})
+	if err != nil {
+		writeDatabaseError(c, err)
+		return
+	}
+
+	h.recordAdminAction(c, "tenant.wallet.reconcile", "tenant", item.ID, item.Name, gin.H{
+		"amount":         request.Amount,
+		"note":           strings.TrimSpace(request.Note),
+		"wallet_balance": item.WalletBalance,
+	})
+
+	c.JSON(http.StatusOK, item)
+}
+
+func (h *Handler) ListTenantWalletLedger(c *gin.Context) {
+	if h.store == nil {
+		writeServiceUnavailable(c)
+		return
+	}
+
+	id, ok := parseResourceID(c)
+	if !ok {
+		return
+	}
+	page, ok := parsePositiveIntQuery(c, "page", 1, 1, 1000000)
+	if !ok {
+		return
+	}
+	pageSize, ok := parsePositiveIntQuery(c, "page_size", 20, 1, 200)
+	if !ok {
+		return
+	}
+
+	items, err := h.store.ListTenantWalletLedger(c.Request.Context(), id, page, pageSize)
+	if err != nil {
+		writeDatabaseError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, items)
 }
 
 func (h *Handler) CreateProvider(c *gin.Context) {
@@ -282,6 +586,12 @@ func (h *Handler) CreateProvider(c *gin.Context) {
 		writeDatabaseError(c, err)
 		return
 	}
+
+	h.recordAdminAction(c, "provider.create", "provider", item.ID, item.Name, gin.H{
+		"slug":          item.Slug,
+		"provider_type": item.ProviderType,
+		"status":        item.Status,
+	})
 
 	c.JSON(http.StatusCreated, item)
 }
@@ -324,6 +634,12 @@ func (h *Handler) UpdateProvider(c *gin.Context) {
 		writeDatabaseError(c, err)
 		return
 	}
+
+	h.recordAdminAction(c, "provider.update", "provider", item.ID, item.Name, gin.H{
+		"slug":          item.Slug,
+		"provider_type": item.ProviderType,
+		"status":        item.Status,
+	})
 
 	c.JSON(http.StatusOK, item)
 }
@@ -393,6 +709,14 @@ func (h *Handler) CreateClientAPIKey(c *gin.Context) {
 		return
 	}
 
+	h.recordAdminAction(c, "client_key.create", "client_api_key", item.ID, item.Name, gin.H{
+		"tenant_id":          item.TenantID,
+		"status":             item.Status,
+		"allowed_model_ids":  item.AllowedModelIDs,
+		"daily_cost_limit":   item.DailyCostLimit,
+		"monthly_cost_limit": item.MonthlyCostLimit,
+	})
+
 	c.JSON(http.StatusCreated, item)
 }
 
@@ -443,6 +767,14 @@ func (h *Handler) UpdateClientAPIKey(c *gin.Context) {
 		writeDatabaseError(c, err)
 		return
 	}
+
+	h.recordAdminAction(c, "client_key.update", "client_api_key", item.ID, item.Name, gin.H{
+		"tenant_id":          item.TenantID,
+		"status":             item.Status,
+		"allowed_model_ids":  item.AllowedModelIDs,
+		"daily_cost_limit":   item.DailyCostLimit,
+		"monthly_cost_limit": item.MonthlyCostLimit,
+	})
 
 	c.JSON(http.StatusOK, item)
 }
@@ -502,6 +834,13 @@ func (h *Handler) CreateProviderKey(c *gin.Context) {
 		return
 	}
 
+	h.recordAdminAction(c, "provider_key.create", "provider_key", item.ID, item.Name, gin.H{
+		"provider_id": item.ProviderID,
+		"status":      item.Status,
+		"priority":    item.Priority,
+		"weight":      item.Weight,
+	})
+
 	c.JSON(http.StatusCreated, item)
 }
 
@@ -551,6 +890,14 @@ func (h *Handler) UpdateProviderKey(c *gin.Context) {
 		return
 	}
 
+	h.recordAdminAction(c, "provider_key.update", "provider_key", item.ID, item.Name, gin.H{
+		"provider_id": item.ProviderID,
+		"status":      item.Status,
+		"priority":    item.Priority,
+		"weight":      item.Weight,
+		"api_key_set": request.APIKey != nil && strings.TrimSpace(*request.APIKey) != "",
+	})
+
 	c.JSON(http.StatusOK, item)
 }
 
@@ -585,19 +932,21 @@ func (h *Handler) CreateModel(c *gin.Context) {
 	}
 
 	input := entity.CreateModelInput{
-		PublicName:      strings.TrimSpace(request.PublicName),
-		ProviderID:      request.ProviderID,
-		UpstreamModel:   strings.TrimSpace(request.UpstreamModel),
-		RouteStrategy:   defaultString(request.RouteStrategy, "fixed"),
-		IsEnabled:       defaultBool(request.IsEnabled, true),
-		MaxTokens:       request.MaxTokens,
-		Temperature:     request.Temperature,
-		TimeoutSeconds:  defaultOptionalInt(request.TimeoutSeconds, 120),
-		CostInputPer1M:  request.CostInputPer1M,
-		CostOutputPer1M: request.CostOutputPer1M,
-		SaleInputPer1M:  request.SaleInputPer1M,
-		SaleOutputPer1M: request.SaleOutputPer1M,
-		Metadata:        normalizeJSON(request.Metadata),
+		PublicName:        strings.TrimSpace(request.PublicName),
+		ProviderID:        request.ProviderID,
+		UpstreamModel:     strings.TrimSpace(request.UpstreamModel),
+		RouteStrategy:     defaultString(request.RouteStrategy, "fixed"),
+		IsEnabled:         defaultBool(request.IsEnabled, true),
+		MaxTokens:         request.MaxTokens,
+		Temperature:       request.Temperature,
+		TimeoutSeconds:    defaultOptionalInt(request.TimeoutSeconds, 120),
+		CostInputPer1M:    request.CostInputPer1M,
+		CostOutputPer1M:   request.CostOutputPer1M,
+		SaleInputPer1M:    request.SaleInputPer1M,
+		SaleOutputPer1M:   request.SaleOutputPer1M,
+		ReserveMultiplier: defaultPositiveFloat(request.ReserveMultiplier, 1),
+		ReserveMinAmount:  request.ReserveMinAmount,
+		Metadata:          normalizeJSON(request.Metadata),
 	}
 
 	if input.PublicName == "" || input.ProviderID <= 0 || input.UpstreamModel == "" {
@@ -610,6 +959,14 @@ func (h *Handler) CreateModel(c *gin.Context) {
 		writeDatabaseError(c, err)
 		return
 	}
+
+	h.recordAdminAction(c, "model.create", "model", item.ID, item.PublicName, gin.H{
+		"provider_id":        item.ProviderID,
+		"route_strategy":     item.RouteStrategy,
+		"is_enabled":         item.IsEnabled,
+		"sale_input_per_1m":  item.SaleInputPer1M,
+		"sale_output_per_1m": item.SaleOutputPer1M,
+	})
 
 	c.JSON(http.StatusCreated, item)
 }
@@ -632,20 +989,22 @@ func (h *Handler) UpdateModel(c *gin.Context) {
 	}
 
 	input := entity.UpdateModelInput{
-		ID:              id,
-		PublicName:      strings.TrimSpace(request.PublicName),
-		ProviderID:      request.ProviderID,
-		UpstreamModel:   strings.TrimSpace(request.UpstreamModel),
-		RouteStrategy:   defaultString(request.RouteStrategy, "fixed"),
-		IsEnabled:       defaultBool(request.IsEnabled, true),
-		MaxTokens:       request.MaxTokens,
-		Temperature:     request.Temperature,
-		TimeoutSeconds:  defaultOptionalInt(request.TimeoutSeconds, 120),
-		CostInputPer1M:  request.CostInputPer1M,
-		CostOutputPer1M: request.CostOutputPer1M,
-		SaleInputPer1M:  request.SaleInputPer1M,
-		SaleOutputPer1M: request.SaleOutputPer1M,
-		Metadata:        normalizeJSON(request.Metadata),
+		ID:                id,
+		PublicName:        strings.TrimSpace(request.PublicName),
+		ProviderID:        request.ProviderID,
+		UpstreamModel:     strings.TrimSpace(request.UpstreamModel),
+		RouteStrategy:     defaultString(request.RouteStrategy, "fixed"),
+		IsEnabled:         defaultBool(request.IsEnabled, true),
+		MaxTokens:         request.MaxTokens,
+		Temperature:       request.Temperature,
+		TimeoutSeconds:    defaultOptionalInt(request.TimeoutSeconds, 120),
+		CostInputPer1M:    request.CostInputPer1M,
+		CostOutputPer1M:   request.CostOutputPer1M,
+		SaleInputPer1M:    request.SaleInputPer1M,
+		SaleOutputPer1M:   request.SaleOutputPer1M,
+		ReserveMultiplier: defaultPositiveFloat(request.ReserveMultiplier, 1),
+		ReserveMinAmount:  request.ReserveMinAmount,
+		Metadata:          normalizeJSON(request.Metadata),
 	}
 
 	if input.PublicName == "" || input.ProviderID <= 0 || input.UpstreamModel == "" {
@@ -658,6 +1017,14 @@ func (h *Handler) UpdateModel(c *gin.Context) {
 		writeDatabaseError(c, err)
 		return
 	}
+
+	h.recordAdminAction(c, "model.update", "model", item.ID, item.PublicName, gin.H{
+		"provider_id":        item.ProviderID,
+		"route_strategy":     item.RouteStrategy,
+		"is_enabled":         item.IsEnabled,
+		"sale_input_per_1m":  item.SaleInputPer1M,
+		"sale_output_per_1m": item.SaleOutputPer1M,
+	})
 
 	c.JSON(http.StatusOK, item)
 }
@@ -785,6 +1152,7 @@ func (h *Handler) ExportLogs(c *gin.Context) {
 		"prompt_tokens",
 		"completion_tokens",
 		"total_tokens",
+		"reserved_amount",
 		"error_type",
 		"error_message",
 		"created_at",
@@ -804,6 +1172,7 @@ func (h *Handler) ExportLogs(c *gin.Context) {
 			strconv.Itoa(item.PromptTokens),
 			strconv.Itoa(item.CompletionTokens),
 			strconv.Itoa(item.TotalTokens),
+			strconv.FormatFloat(item.ReservedAmount, 'f', 8, 64),
 			item.ErrorType,
 			item.ErrorMessage,
 			item.CreatedAt.Format(time.RFC3339),
@@ -817,6 +1186,111 @@ func (h *Handler) ExportLogs(c *gin.Context) {
 
 	c.Header("Content-Type", "text/csv; charset=utf-8")
 	c.Header("Content-Disposition", `attachment; filename="request_logs.csv"`)
+	c.Data(http.StatusOK, "text/csv; charset=utf-8", buffer.Bytes())
+}
+
+func (h *Handler) ExportTenantBilling(c *gin.Context) {
+	if h.store == nil {
+		writeServiceUnavailable(c)
+		return
+	}
+
+	id, ok := parseResourceID(c)
+	if !ok {
+		return
+	}
+	httpStatus, ok := parseNonNegativeIntQuery(c, "http_status")
+	if !ok {
+		return
+	}
+	createdFrom, ok := parseTimeQuery(c, "created_from")
+	if !ok {
+		return
+	}
+	createdTo, ok := parseTimeQuery(c, "created_to")
+	if !ok {
+		return
+	}
+
+	var success *bool
+	if rawSuccess := strings.TrimSpace(c.Query("success")); rawSuccess != "" {
+		parsed, err := strconv.ParseBool(rawSuccess)
+		if err != nil {
+			writeBadRequest(c, "success must be true or false")
+			return
+		}
+		success = &parsed
+	}
+
+	items, err := h.store.ExportTenantRequestLogs(c.Request.Context(), id, entity.ListRequestLogsInput{
+		ModelPublicName: strings.TrimSpace(c.Query("model_public_name")),
+		Success:         success,
+		HTTPStatus:      httpStatus,
+		TraceID:         strings.TrimSpace(c.Query("trace_id")),
+		CreatedFrom:     createdFrom,
+		CreatedTo:       createdTo,
+	})
+	if err != nil {
+		writeDatabaseError(c, err)
+		return
+	}
+
+	buffer := bytes.NewBuffer(nil)
+	writer := csv.NewWriter(buffer)
+	_ = writer.Write([]string{
+		"id",
+		"trace_id",
+		"client_api_key_name",
+		"provider_name",
+		"provider_key_name",
+		"model_public_name",
+		"request_type",
+		"http_status",
+		"success",
+		"latency_ms",
+		"prompt_tokens",
+		"completion_tokens",
+		"total_tokens",
+		"reserved_amount",
+		"cost_amount",
+		"billable_amount",
+		"gross_profit",
+		"error_type",
+		"error_message",
+		"created_at",
+	})
+	for _, item := range items {
+		_ = writer.Write([]string{
+			strconv.FormatInt(item.ID, 10),
+			item.TraceID,
+			item.ClientAPIKeyName,
+			item.ProviderName,
+			item.ProviderKeyName,
+			item.ModelPublicName,
+			item.RequestType,
+			strconv.Itoa(item.HTTPStatus),
+			strconv.FormatBool(item.Success),
+			strconv.Itoa(item.LatencyMS),
+			strconv.Itoa(item.PromptTokens),
+			strconv.Itoa(item.CompletionTokens),
+			strconv.Itoa(item.TotalTokens),
+			strconv.FormatFloat(item.ReservedAmount, 'f', 8, 64),
+			strconv.FormatFloat(item.CostAmount, 'f', 8, 64),
+			strconv.FormatFloat(item.BillableAmount, 'f', 8, 64),
+			strconv.FormatFloat(item.BillableAmount-item.CostAmount, 'f', 8, 64),
+			item.ErrorType,
+			item.ErrorMessage,
+			item.CreatedAt.Format(time.RFC3339),
+		})
+	}
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		writeDatabaseError(c, err)
+		return
+	}
+
+	c.Header("Content-Type", "text/csv; charset=utf-8")
+	c.Header("Content-Disposition", `attachment; filename="tenant_billing.csv"`)
 	c.Data(http.StatusOK, "text/csv; charset=utf-8", buffer.Bytes())
 }
 
@@ -875,6 +1349,24 @@ func (h *Handler) GetStats(c *gin.Context) {
 	stats.BudgetPressure = buildBudgetPressure(clientKeys, 5)
 
 	c.JSON(http.StatusOK, stats)
+}
+
+func (h *Handler) GetTenantBillingReconciliation(c *gin.Context) {
+	if h.store == nil {
+		writeServiceUnavailable(c)
+		return
+	}
+
+	items, err := h.store.GetTenantBillingReconciliation(c.Request.Context())
+	if err != nil {
+		writeDatabaseError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"items": items,
+		"total": len(items),
+	})
 }
 
 func (h *Handler) enrichClientKeyUsage(ctx context.Context, items []entity.ClientAPIKey) ([]entity.ClientAPIKey, error) {
@@ -1097,6 +1589,14 @@ func defaultFloat64(value float64, fallback float64) float64 {
 	return value
 }
 
+func defaultPositiveFloat(value float64, fallback float64) float64 {
+	if value <= 0 {
+		return fallback
+	}
+
+	return value
+}
+
 func defaultBool(value *bool, fallback bool) bool {
 	if value == nil {
 		return fallback
@@ -1210,4 +1710,52 @@ func normalizeInt64Slice(values []int64) []int64 {
 	}
 
 	return items
+}
+
+func (h *Handler) currentAdminActor(c *gin.Context) adminActor {
+	actor := adminActor{}
+	if rawMode, ok := c.Get("admin_auth_mode"); ok {
+		if mode, valid := rawMode.(string); valid {
+			actor.AuthMode = strings.TrimSpace(mode)
+		}
+	}
+	if claims, ok := adminauthsvc.ClaimsFromContext(c); ok {
+		actor.UserID = claims.Sub
+		actor.Username = strings.TrimSpace(claims.Username)
+		actor.DisplayName = strings.TrimSpace(claims.DisplayName)
+	}
+	if actor.AuthMode == "" {
+		actor.AuthMode = "session"
+	}
+	return actor
+}
+
+func (h *Handler) recordAdminAction(c *gin.Context, action string, resourceType string, resourceID int64, resourceName string, metadata any) {
+	if h.store == nil {
+		return
+	}
+
+	actor := h.currentAdminActor(c)
+	var payload json.RawMessage
+	if metadata != nil {
+		if encoded, err := json.Marshal(metadata); err == nil {
+			payload = encoded
+		}
+	}
+
+	// Best-effort write to avoid turning a successful mutation into a confusing 500 after commit.
+	_ = h.store.CreateAdminActionLog(c.Request.Context(), entity.CreateAdminActionLogInput{
+		AdminUserID:      actor.UserID,
+		AdminUsername:    actor.Username,
+		AdminDisplayName: actor.DisplayName,
+		AuthMode:         actor.AuthMode,
+		Action:           action,
+		ResourceType:     resourceType,
+		ResourceID:       resourceID,
+		ResourceName:     strings.TrimSpace(resourceName),
+		RequestMethod:    c.Request.Method,
+		RequestPath:      c.FullPath(),
+		ClientIP:         c.ClientIP(),
+		Metadata:         payload,
+	})
 }

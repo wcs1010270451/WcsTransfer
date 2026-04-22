@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -167,6 +168,8 @@ func (h *Handler) handleMessages(c *gin.Context, options chatCompletionOptions) 
 	logState.metadata["cost_output_per_1m"] = route.Model.CostOutputPer1M
 	logState.metadata["sale_input_per_1m"] = route.Model.SaleInputPer1M
 	logState.metadata["sale_output_per_1m"] = route.Model.SaleOutputPer1M
+	logState.metadata["reserve_multiplier"] = route.Model.ReserveMultiplier
+	logState.metadata["reserve_min_amount"] = route.Model.ReserveMinAmount
 
 	route, err = applyChatRouteOptions(route, options, logState.metadata)
 	if err != nil {
@@ -196,6 +199,19 @@ func (h *Handler) handleMessages(c *gin.Context, options chatCompletionOptions) 
 	}
 	if _, exists := payload["temperature"]; !exists && route.Model.Temperature > 0 {
 		payload["temperature"] = route.Model.Temperature
+	}
+	if clientKey, ok := middleware.ClientAPIKeyFromContext(c); ok && clientKey.TenantID > 0 {
+		requiredReserve := estimateAnthropicReserveAmount(payload, route.Model)
+		logState.reservedAmount = requiredReserve
+		logState.metadata["required_wallet_reserve"] = requiredReserve
+		if requiredReserve > 0 && clientKey.TenantWalletBalance < requiredReserve {
+			writeJSONError(
+				http.StatusPaymentRequired,
+				"wallet_reserve_insufficient",
+				fmt.Sprintf("tenant wallet balance is below the required reserve %.4f USD", requiredReserve),
+			)
+			return
+		}
 	}
 
 	rewrittenBody, err := json.Marshal(payload)
@@ -358,6 +374,19 @@ func (h *Handler) handleMessages(c *gin.Context, options chatCompletionOptions) 
 		}
 		return
 	}
+}
+
+func estimateAnthropicReserveAmount(payload map[string]any, model entity.Model) float64 {
+	promptTokens := estimatePromptTokens(payload["messages"])
+	completionTokens := extractPositiveInt(payload["max_tokens"])
+	if completionTokens <= 0 {
+		completionTokens = model.MaxTokens
+	}
+	if completionTokens <= 0 {
+		completionTokens = 1024
+	}
+	_, billableAmount := amountsForUsage(promptTokens, completionTokens, model)
+	return applyReservePolicy(billableAmount, model)
 }
 
 func parseAnthropicMessagesPayload(body []byte) (map[string]any, string, error) {

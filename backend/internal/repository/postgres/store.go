@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -154,7 +155,7 @@ RETURNING id, name, slug, provider_type, base_url, status, description, extra_co
 
 func (s *Store) ListTenants(ctx context.Context) ([]entity.Tenant, error) {
 	const query = `
-SELECT id, name, slug, status, max_client_keys, wallet_balance::float8, notes, created_at, updated_at
+SELECT id, name, slug, status, max_client_keys, wallet_balance::float8, min_available_balance::float8, notes, created_at, updated_at
 FROM tenants
 ORDER BY id DESC`
 
@@ -167,7 +168,7 @@ ORDER BY id DESC`
 	items := make([]entity.Tenant, 0)
 	for rows.Next() {
 		var item entity.Tenant
-		if err := rows.Scan(&item.ID, &item.Name, &item.Slug, &item.Status, &item.MaxClientKeys, &item.WalletBalance, &item.Notes, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.Slug, &item.Status, &item.MaxClientKeys, &item.WalletBalance, &item.MinAvailableBalance, &item.Notes, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan tenant: %w", err)
 		}
 		items = append(items, item)
@@ -178,6 +179,40 @@ ORDER BY id DESC`
 	return items, nil
 }
 
+func (s *Store) CreateTenant(ctx context.Context, input entity.CreateTenantInput) (entity.Tenant, error) {
+	const query = `
+INSERT INTO tenants (name, slug, status, max_client_keys, min_available_balance, notes)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, name, slug, status, max_client_keys, wallet_balance::float8, min_available_balance::float8, notes, created_at, updated_at`
+
+	var item entity.Tenant
+	err := s.pool.QueryRow(
+		ctx,
+		query,
+		input.Name,
+		input.Slug,
+		input.Status,
+		input.MaxClientKeys,
+		input.MinAvailableBalance,
+		input.Notes,
+	).Scan(
+		&item.ID,
+		&item.Name,
+		&item.Slug,
+		&item.Status,
+		&item.MaxClientKeys,
+		&item.WalletBalance,
+		&item.MinAvailableBalance,
+		&item.Notes,
+		&item.CreatedAt,
+		&item.UpdatedAt,
+	)
+	if err != nil {
+		return entity.Tenant{}, fmt.Errorf("insert tenant: %w", err)
+	}
+	return item, nil
+}
+
 func (s *Store) UpdateTenant(ctx context.Context, input entity.UpdateTenantInput) (entity.Tenant, error) {
 	const query = `
 UPDATE tenants
@@ -185,18 +220,20 @@ SET name = $2,
     slug = $3,
     status = $4,
     max_client_keys = $5,
-    notes = $6
+    min_available_balance = $6,
+    notes = $7
 WHERE id = $1
-RETURNING id, name, slug, status, max_client_keys, wallet_balance::float8, notes, created_at, updated_at`
+RETURNING id, name, slug, status, max_client_keys, wallet_balance::float8, min_available_balance::float8, notes, created_at, updated_at`
 
 	var item entity.Tenant
-	err := s.pool.QueryRow(ctx, query, input.ID, input.Name, input.Slug, input.Status, input.MaxClientKeys, input.Notes).Scan(
+	err := s.pool.QueryRow(ctx, query, input.ID, input.Name, input.Slug, input.Status, input.MaxClientKeys, input.MinAvailableBalance, input.Notes).Scan(
 		&item.ID,
 		&item.Name,
 		&item.Slug,
 		&item.Status,
 		&item.MaxClientKeys,
 		&item.WalletBalance,
+		&item.MinAvailableBalance,
 		&item.Notes,
 		&item.CreatedAt,
 		&item.UpdatedAt,
@@ -207,8 +244,186 @@ RETURNING id, name, slug, status, max_client_keys, wallet_balance::float8, notes
 	return item, nil
 }
 
+func (s *Store) ListTenantUsers(ctx context.Context, tenantID int64) ([]entity.TenantUser, error) {
+	const query = `
+SELECT tu.id, tu.tenant_id, t.name, tu.email, tu.full_name, tu.status, tu.last_login_at, tu.created_at, tu.updated_at
+FROM tenant_users tu
+JOIN tenants t ON t.id = tu.tenant_id
+WHERE tu.tenant_id = $1
+ORDER BY tu.id DESC`
+
+	rows, err := s.pool.Query(ctx, query, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("query tenant users: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]entity.TenantUser, 0)
+	for rows.Next() {
+		var item entity.TenantUser
+		if err := rows.Scan(
+			&item.ID,
+			&item.TenantID,
+			&item.TenantName,
+			&item.Email,
+			&item.FullName,
+			&item.Status,
+			&item.LastLoginAt,
+			&item.CreatedAt,
+			&item.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan tenant user: %w", err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate tenant users: %w", err)
+	}
+	return items, nil
+}
+
+func (s *Store) CreateTenantUser(ctx context.Context, input entity.CreateTenantUserInput) (entity.TenantUser, error) {
+	if strings.TrimSpace(input.Email) == "" {
+		return entity.TenantUser{}, fmt.Errorf("email is required")
+	}
+	if strings.TrimSpace(input.FullName) == "" {
+		return entity.TenantUser{}, fmt.Errorf("full name is required")
+	}
+	if len(strings.TrimSpace(input.Password)) < 8 {
+		return entity.TenantUser{}, fmt.Errorf("password must be at least 8 characters")
+	}
+
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(input.Password), bcrypt.DefaultCost)
+	if err != nil {
+		return entity.TenantUser{}, fmt.Errorf("hash tenant user password: %w", err)
+	}
+
+	status := strings.TrimSpace(input.Status)
+	if status == "" {
+		status = "active"
+	}
+
+	const query = `
+INSERT INTO tenant_users (tenant_id, email, password_hash, full_name, status)
+SELECT t.id, $2, $3, $4, $5
+FROM tenants t
+WHERE t.id = $1
+RETURNING id, tenant_id, $6, email, full_name, status, last_login_at, created_at, updated_at`
+
+	var item entity.TenantUser
+	err = s.pool.QueryRow(
+		ctx,
+		query,
+		input.TenantID,
+		strings.ToLower(strings.TrimSpace(input.Email)),
+		string(passwordHash),
+		strings.TrimSpace(input.FullName),
+		status,
+		"",
+	).Scan(
+		&item.ID,
+		&item.TenantID,
+		&item.TenantName,
+		&item.Email,
+		&item.FullName,
+		&item.Status,
+		&item.LastLoginAt,
+		&item.CreatedAt,
+		&item.UpdatedAt,
+	)
+	if err != nil {
+		return entity.TenantUser{}, fmt.Errorf("insert tenant user: %w", err)
+	}
+
+	if tenant, tenantErr := s.GetTenantByID(ctx, input.TenantID); tenantErr == nil {
+		item.TenantName = tenant.Name
+	}
+
+	return item, nil
+}
+
+func (s *Store) UpdateTenantUserStatus(ctx context.Context, input entity.UpdateTenantUserStatusInput) (entity.TenantUser, error) {
+	const query = `
+UPDATE tenant_users tu
+SET status = $3
+FROM tenants t
+WHERE tu.id = $1
+  AND tu.tenant_id = $2
+  AND t.id = tu.tenant_id
+RETURNING tu.id, tu.tenant_id, t.name, tu.email, tu.full_name, tu.status, tu.last_login_at, tu.created_at, tu.updated_at`
+
+	var item entity.TenantUser
+	err := s.pool.QueryRow(ctx, query, input.UserID, input.TenantID, strings.TrimSpace(input.Status)).Scan(
+		&item.ID,
+		&item.TenantID,
+		&item.TenantName,
+		&item.Email,
+		&item.FullName,
+		&item.Status,
+		&item.LastLoginAt,
+		&item.CreatedAt,
+		&item.UpdatedAt,
+	)
+	if err != nil {
+		return entity.TenantUser{}, fmt.Errorf("update tenant user status: %w", err)
+	}
+	return item, nil
+}
+
+func (s *Store) ResetTenantUserPassword(ctx context.Context, input entity.ResetTenantUserPasswordInput) error {
+	if len(strings.TrimSpace(input.Password)) < 8 {
+		return fmt.Errorf("password must be at least 8 characters")
+	}
+
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(input.Password), bcrypt.DefaultCost)
+	if err != nil {
+		return fmt.Errorf("hash tenant user password: %w", err)
+	}
+
+	tag, err := s.pool.Exec(
+		ctx,
+		`UPDATE tenant_users SET password_hash = $3 WHERE id = $1 AND tenant_id = $2`,
+		input.UserID,
+		input.TenantID,
+		string(passwordHash),
+	)
+	if err != nil {
+		return fmt.Errorf("reset tenant user password: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
 func (s *Store) AdjustTenantWallet(ctx context.Context, input entity.TenantWalletAdjustmentInput) (entity.Tenant, error) {
 	if input.Amount <= 0 {
+		return entity.Tenant{}, fmt.Errorf("amount must be greater than 0")
+	}
+
+	return s.applyTenantWalletAdminChange(ctx, input.TenantID, "credit", input.Amount, input.Note, input.OperatorID)
+}
+
+func (s *Store) CorrectTenantWallet(ctx context.Context, input entity.TenantWalletCorrectionInput) (entity.Tenant, error) {
+	if input.Amount == 0 {
+		return entity.Tenant{}, fmt.Errorf("amount must not be zero")
+	}
+	if strings.TrimSpace(input.Note) == "" {
+		return entity.Tenant{}, fmt.Errorf("note is required")
+	}
+
+	direction := "credit"
+	amount := input.Amount
+	if amount < 0 {
+		direction = "debit"
+		amount = math.Abs(amount)
+	}
+
+	return s.applyTenantWalletAdminChange(ctx, input.TenantID, direction, amount, input.Note, input.OperatorID)
+}
+
+func (s *Store) applyTenantWalletAdminChange(ctx context.Context, tenantID int64, direction string, amount float64, note string, operatorID int64) (entity.Tenant, error) {
+	if amount <= 0 {
 		return entity.Tenant{}, fmt.Errorf("amount must be greater than 0")
 	}
 
@@ -221,16 +436,17 @@ func (s *Store) AdjustTenantWallet(ctx context.Context, input entity.TenantWalle
 	var item entity.Tenant
 	var before float64
 	err = tx.QueryRow(ctx, `
-SELECT id, name, slug, status, max_client_keys, wallet_balance::float8, notes, created_at, updated_at
+SELECT id, name, slug, status, max_client_keys, wallet_balance::float8, min_available_balance::float8, notes, created_at, updated_at
 FROM tenants
 WHERE id = $1
-FOR UPDATE`, input.TenantID).Scan(
+FOR UPDATE`, tenantID).Scan(
 		&item.ID,
 		&item.Name,
 		&item.Slug,
 		&item.Status,
 		&item.MaxClientKeys,
 		&before,
+		&item.MinAvailableBalance,
 		&item.Notes,
 		&item.CreatedAt,
 		&item.UpdatedAt,
@@ -239,13 +455,21 @@ FOR UPDATE`, input.TenantID).Scan(
 		return entity.Tenant{}, fmt.Errorf("load tenant wallet: %w", err)
 	}
 
-	after := before + input.Amount
+	after := before
+	if direction == "debit" {
+		after -= amount
+		if after < 0 {
+			return entity.Tenant{}, fmt.Errorf("wallet balance cannot be negative after correction")
+		}
+	} else {
+		after += amount
+	}
 	err = tx.QueryRow(ctx, `
 UPDATE tenants
 SET wallet_balance = $2
 WHERE id = $1
-RETURNING id, name, slug, status, max_client_keys, wallet_balance::float8, notes, created_at, updated_at`,
-		input.TenantID,
+RETURNING id, name, slug, status, max_client_keys, wallet_balance::float8, min_available_balance::float8, notes, created_at, updated_at`,
+		tenantID,
 		after,
 	).Scan(
 		&item.ID,
@@ -254,6 +478,7 @@ RETURNING id, name, slug, status, max_client_keys, wallet_balance::float8, notes
 		&item.Status,
 		&item.MaxClientKeys,
 		&item.WalletBalance,
+		&item.MinAvailableBalance,
 		&item.Notes,
 		&item.CreatedAt,
 		&item.UpdatedAt,
@@ -265,13 +490,14 @@ RETURNING id, name, slug, status, max_client_keys, wallet_balance::float8, notes
 	if _, err := tx.Exec(ctx, `
 INSERT INTO tenant_wallet_ledger (
     tenant_id, direction, amount, balance_before, balance_after, note, operator_type, operator_user_id
-) VALUES ($1, 'credit', $2, $3, $4, $5, 'admin', NULLIF($6, 0))`,
-		input.TenantID,
-		input.Amount,
+) VALUES ($1, $2, $3, $4, $5, $6, 'admin', NULLIF($7, 0))`,
+		tenantID,
+		direction,
+		amount,
 		before,
 		after,
-		input.Note,
-		nullableInt64(input.OperatorID),
+		note,
+		nullableInt64(operatorID),
 	); err != nil {
 		return entity.Tenant{}, fmt.Errorf("insert tenant wallet ledger: %w", err)
 	}
@@ -298,7 +524,8 @@ func (s *Store) ListTenantWalletLedger(ctx context.Context, tenantID int64, page
 
 	rows, err := s.pool.Query(ctx, `
 SELECT id, tenant_id, direction, amount::float8, balance_before::float8, balance_after::float8,
-       note, operator_type, COALESCE(operator_user_id, 0), created_at
+       note, operator_type, COALESCE(operator_user_id, 0), COALESCE(request_log_id, 0), trace_id,
+       model_public_name, total_tokens, reserved_amount::float8, cost_amount::float8, billable_amount::float8, created_at
 FROM tenant_wallet_ledger
 WHERE tenant_id = $1
 ORDER BY created_at DESC, id DESC
@@ -325,6 +552,13 @@ LIMIT $2 OFFSET $3`,
 			&item.Note,
 			&item.OperatorType,
 			&item.OperatorUserID,
+			&item.RequestLogID,
+			&item.TraceID,
+			&item.ModelPublicName,
+			&item.TotalTokens,
+			&item.ReservedAmount,
+			&item.CostAmount,
+			&item.BillableAmount,
 			&item.CreatedAt,
 		); err != nil {
 			return entity.TenantWalletLedgerPage{}, fmt.Errorf("scan tenant wallet ledger: %w", err)
@@ -346,7 +580,7 @@ LIMIT $2 OFFSET $3`,
 func (s *Store) ListClientAPIKeys(ctx context.Context) ([]entity.ClientAPIKey, error) {
 	const query = `
 SELECT cak.id, cak.name, cak.masked_key, cak.status, cak.description,
-       COALESCE(cak.tenant_id, 0), COALESCE(t.name, ''), COALESCE(t.wallet_balance, 0)::float8,
+       COALESCE(cak.tenant_id, 0), COALESCE(t.name, ''), COALESCE(t.wallet_balance, 0)::float8, COALESCE(t.min_available_balance, 0)::float8,
        cak.rpm_limit, cak.daily_request_limit, cak.daily_token_limit,
        cak.daily_cost_limit::float8, cak.monthly_cost_limit::float8, cak.warning_threshold::float8,
        COALESCE(model_access.allowed_model_ids, ARRAY[]::bigint[]),
@@ -677,6 +911,7 @@ func (s *Store) ListModels(ctx context.Context) ([]entity.Model, error) {
 SELECT m.id, m.public_name, m.provider_id, p.name, m.upstream_model, m.route_strategy, m.is_enabled,
        m.max_tokens, m.temperature::float8, m.timeout_seconds,
        m.cost_input_per_1m::float8, m.cost_output_per_1m::float8, m.sale_input_per_1m::float8, m.sale_output_per_1m::float8,
+       m.reserve_multiplier::float8, m.reserve_min_amount::float8,
        m.metadata, m.created_at, m.updated_at
 FROM models m
 JOIN providers p ON p.id = m.provider_id
@@ -707,6 +942,8 @@ ORDER BY m.id DESC`
 			&item.CostOutputPer1M,
 			&item.SaleInputPer1M,
 			&item.SaleOutputPer1M,
+			&item.ReserveMultiplier,
+			&item.ReserveMinAmount,
 			&rawMetadata,
 			&item.CreatedAt,
 			&item.UpdatedAt,
@@ -728,11 +965,13 @@ func (s *Store) CreateModel(ctx context.Context, input entity.CreateModelInput) 
 	const query = `
 INSERT INTO models (
     public_name, provider_id, upstream_model, route_strategy, is_enabled, max_tokens,
-    temperature, timeout_seconds, cost_input_per_1m, cost_output_per_1m, sale_input_per_1m, sale_output_per_1m, metadata
+    temperature, timeout_seconds, cost_input_per_1m, cost_output_per_1m, sale_input_per_1m, sale_output_per_1m,
+    reserve_multiplier, reserve_min_amount, metadata
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 RETURNING id, public_name, provider_id, upstream_model, route_strategy, is_enabled, max_tokens,
           temperature::float8, timeout_seconds, cost_input_per_1m::float8, cost_output_per_1m::float8, sale_input_per_1m::float8, sale_output_per_1m::float8,
+          reserve_multiplier::float8, reserve_min_amount::float8,
           metadata, created_at, updated_at`
 
 	var item entity.Model
@@ -752,6 +991,8 @@ RETURNING id, public_name, provider_id, upstream_model, route_strategy, is_enabl
 		input.CostOutputPer1M,
 		input.SaleInputPer1M,
 		input.SaleOutputPer1M,
+		input.ReserveMultiplier,
+		input.ReserveMinAmount,
 		normalizeJSON(input.Metadata),
 	).Scan(
 		&item.ID,
@@ -767,6 +1008,8 @@ RETURNING id, public_name, provider_id, upstream_model, route_strategy, is_enabl
 		&item.CostOutputPer1M,
 		&item.SaleInputPer1M,
 		&item.SaleOutputPer1M,
+		&item.ReserveMultiplier,
+		&item.ReserveMinAmount,
 		&rawMetadata,
 		&item.CreatedAt,
 		&item.UpdatedAt,
@@ -800,10 +1043,13 @@ SET public_name = $2,
     cost_output_per_1m = $11,
     sale_input_per_1m = $12,
     sale_output_per_1m = $13,
-    metadata = $14
+    reserve_multiplier = $14,
+    reserve_min_amount = $15,
+    metadata = $16
 WHERE id = $1
 RETURNING id, public_name, provider_id, upstream_model, route_strategy, is_enabled, max_tokens,
           temperature::float8, timeout_seconds, cost_input_per_1m::float8, cost_output_per_1m::float8, sale_input_per_1m::float8, sale_output_per_1m::float8,
+          reserve_multiplier::float8, reserve_min_amount::float8,
           metadata, created_at, updated_at`
 
 	var item entity.Model
@@ -824,6 +1070,8 @@ RETURNING id, public_name, provider_id, upstream_model, route_strategy, is_enabl
 		input.CostOutputPer1M,
 		input.SaleInputPer1M,
 		input.SaleOutputPer1M,
+		input.ReserveMultiplier,
+		input.ReserveMinAmount,
 		normalizeJSON(input.Metadata),
 	).Scan(
 		&item.ID,
@@ -839,6 +1087,8 @@ RETURNING id, public_name, provider_id, upstream_model, route_strategy, is_enabl
 		&item.CostOutputPer1M,
 		&item.SaleInputPer1M,
 		&item.SaleOutputPer1M,
+		&item.ReserveMultiplier,
+		&item.ReserveMinAmount,
 		&rawMetadata,
 		&item.CreatedAt,
 		&item.UpdatedAt,
@@ -862,6 +1112,7 @@ func (s *Store) ListEnabledModels(ctx context.Context) ([]entity.Model, error) {
 SELECT m.id, m.public_name, m.provider_id, p.name, m.upstream_model, m.route_strategy, m.is_enabled,
        m.max_tokens, m.temperature::float8, m.timeout_seconds,
        m.cost_input_per_1m::float8, m.cost_output_per_1m::float8, m.sale_input_per_1m::float8, m.sale_output_per_1m::float8,
+       m.reserve_multiplier::float8, m.reserve_min_amount::float8,
        m.metadata, m.created_at, m.updated_at
 FROM models m
 JOIN providers p ON p.id = m.provider_id
@@ -893,6 +1144,8 @@ ORDER BY m.public_name ASC`
 			&item.CostOutputPer1M,
 			&item.SaleInputPer1M,
 			&item.SaleOutputPer1M,
+			&item.ReserveMultiplier,
+			&item.ReserveMinAmount,
 			&rawMetadata,
 			&item.CreatedAt,
 			&item.UpdatedAt,
@@ -915,6 +1168,7 @@ func (s *Store) ResolveModelRoute(ctx context.Context, publicName string) (entit
 SELECT
 	m.id, m.public_name, m.provider_id, m.upstream_model, m.route_strategy, m.is_enabled,
 	m.max_tokens, m.temperature::float8, m.timeout_seconds, m.cost_input_per_1m::float8, m.cost_output_per_1m::float8, m.sale_input_per_1m::float8, m.sale_output_per_1m::float8,
+    m.reserve_multiplier::float8, m.reserve_min_amount::float8,
     m.metadata, m.created_at, m.updated_at,
 	p.id, p.name, p.slug, p.provider_type, p.base_url, p.status, p.description, p.extra_config, p.created_at, p.updated_at
 FROM models m
@@ -941,6 +1195,8 @@ LIMIT 1`
 		&route.Model.CostOutputPer1M,
 		&route.Model.SaleInputPer1M,
 		&route.Model.SaleOutputPer1M,
+		&route.Model.ReserveMultiplier,
+		&route.Model.ReserveMinAmount,
 		&modelMetadata,
 		&route.Model.CreatedAt,
 		&route.Model.UpdatedAt,
@@ -989,7 +1245,7 @@ WITH updated_key AS (
               expires_at, last_used_at, last_error_at, last_error_message, created_at, updated_at
 )
 SELECT uk.id, uk.name, uk.masked_key, uk.status, uk.description,
-       COALESCE(uk.tenant_id, 0), COALESCE(t.name, ''), COALESCE(t.wallet_balance, 0)::float8,
+       COALESCE(uk.tenant_id, 0), COALESCE(t.name, ''), COALESCE(t.wallet_balance, 0)::float8, COALESCE(t.min_available_balance, 0)::float8,
        uk.rpm_limit, uk.daily_request_limit, uk.daily_token_limit,
        uk.daily_cost_limit::float8, uk.monthly_cost_limit::float8, uk.warning_threshold::float8,
        COALESCE(model_access.allowed_model_ids, ARRAY[]::bigint[]),
@@ -1044,7 +1300,7 @@ func (s *Store) RegisterTenantUser(ctx context.Context, input entity.RegisterTen
 	var tenantID int64
 	err = tx.QueryRow(
 		ctx,
-		`INSERT INTO tenants (name, slug, status, max_client_keys, notes) VALUES ($1, $2, 'pending', 0, '') RETURNING id`,
+		`INSERT INTO tenants (name, slug, status, max_client_keys, min_available_balance, notes) VALUES ($1, $2, 'pending', 0, 0.01, '') RETURNING id`,
 		input.TenantName,
 		input.TenantSlug,
 	).Scan(&tenantID)
@@ -1109,6 +1365,67 @@ WHERE tu.email = $1
 	return user, nil
 }
 
+func (s *Store) AuthenticateAdminUser(ctx context.Context, username string, password string) (entity.AdminUser, error) {
+	const query = `
+SELECT id, username, display_name, status, password_hash, last_login_at, created_at, updated_at
+FROM admin_users
+WHERE username = $1
+  AND status = 'active'`
+
+	var user entity.AdminUser
+	var passwordHash string
+	err := s.pool.QueryRow(ctx, query, strings.TrimSpace(username)).Scan(
+		&user.ID,
+		&user.Username,
+		&user.DisplayName,
+		&user.Status,
+		&passwordHash,
+		&user.LastLoginAt,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+	)
+	if err != nil {
+		return entity.AdminUser{}, fmt.Errorf("authenticate admin user: %w", err)
+	}
+
+	if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(password)); err != nil {
+		return entity.AdminUser{}, pgx.ErrNoRows
+	}
+
+	return user, nil
+}
+
+func (s *Store) UpdateAdminUserLastLogin(ctx context.Context, userID int64) error {
+	if _, err := s.pool.Exec(ctx, `UPDATE admin_users SET last_login_at = NOW() WHERE id = $1`, userID); err != nil {
+		return fmt.Errorf("update admin user last login: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) GetAdminUserByID(ctx context.Context, userID int64) (entity.AdminUser, error) {
+	const query = `
+SELECT id, username, display_name, status, last_login_at, created_at, updated_at
+FROM admin_users
+WHERE id = $1
+  AND status = 'active'`
+
+	var user entity.AdminUser
+	err := s.pool.QueryRow(ctx, query, userID).Scan(
+		&user.ID,
+		&user.Username,
+		&user.DisplayName,
+		&user.Status,
+		&user.LastLoginAt,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+	)
+	if err != nil {
+		return entity.AdminUser{}, fmt.Errorf("get admin user by id: %w", err)
+	}
+
+	return user, nil
+}
+
 func (s *Store) UpdateTenantUserLastLogin(ctx context.Context, userID int64) error {
 	if _, err := s.pool.Exec(ctx, `UPDATE tenant_users SET last_login_at = NOW() WHERE id = $1`, userID); err != nil {
 		return fmt.Errorf("update tenant user last login: %w", err)
@@ -1145,7 +1462,7 @@ WHERE tu.id = $1
 
 func (s *Store) GetTenantByID(ctx context.Context, tenantID int64) (entity.Tenant, error) {
 	const query = `
-SELECT id, name, slug, status, max_client_keys, wallet_balance::float8, notes, created_at, updated_at
+SELECT id, name, slug, status, max_client_keys, wallet_balance::float8, min_available_balance::float8, notes, created_at, updated_at
 FROM tenants
 WHERE id = $1`
 
@@ -1157,6 +1474,7 @@ WHERE id = $1`
 		&item.Status,
 		&item.MaxClientKeys,
 		&item.WalletBalance,
+		&item.MinAvailableBalance,
 		&item.Notes,
 		&item.CreatedAt,
 		&item.UpdatedAt,
@@ -1170,7 +1488,7 @@ WHERE id = $1`
 func (s *Store) ListTenantClientAPIKeys(ctx context.Context, tenantID int64) ([]entity.ClientAPIKey, error) {
 	const query = `
 SELECT cak.id, cak.name, cak.masked_key, cak.status, cak.description,
-       COALESCE(cak.tenant_id, 0), COALESCE(t.name, ''), COALESCE(t.wallet_balance, 0)::float8,
+       COALESCE(cak.tenant_id, 0), COALESCE(t.name, ''), COALESCE(t.wallet_balance, 0)::float8, COALESCE(t.min_available_balance, 0)::float8,
        cak.rpm_limit, cak.daily_request_limit, cak.daily_token_limit,
        cak.daily_cost_limit::float8, cak.monthly_cost_limit::float8, cak.warning_threshold::float8,
        COALESCE(model_access.allowed_model_ids, ARRAY[]::bigint[]),
@@ -1240,6 +1558,24 @@ WITH request_stats AS (
     JOIN client_api_keys cak ON cak.id = rl.client_api_key_id
     WHERE cak.tenant_id = $1
 ),
+today_billing AS (
+    SELECT
+        COALESCE(SUM(rl.cost_amount), 0)::float8 AS cost_amount,
+        COALESCE(SUM(rl.billable_amount), 0)::float8 AS billable_amount
+    FROM request_logs rl
+    JOIN client_api_keys cak ON cak.id = rl.client_api_key_id
+    WHERE cak.tenant_id = $1
+      AND rl.created_at >= date_trunc('day', NOW())
+),
+month_billing AS (
+    SELECT
+        COALESCE(SUM(rl.cost_amount), 0)::float8 AS cost_amount,
+        COALESCE(SUM(rl.billable_amount), 0)::float8 AS billable_amount
+    FROM request_logs rl
+    JOIN client_api_keys cak ON cak.id = rl.client_api_key_id
+    WHERE cak.tenant_id = $1
+      AND rl.created_at >= date_trunc('month', NOW())
+),
 key_stats AS (
     SELECT
         COUNT(*)::bigint AS client_key_count,
@@ -1257,9 +1593,15 @@ SELECT
     rs.total_tokens,
     rs.cost_amount,
     rs.billable_amount,
+    tb.cost_amount,
+    tb.billable_amount,
+    mb.cost_amount,
+    mb.billable_amount,
     ks.client_key_count,
     ks.active_client_keys
 FROM request_stats rs
+CROSS JOIN today_billing tb
+CROSS JOIN month_billing mb
 CROSS JOIN key_stats ks`
 
 	var stats entity.TenantPortalStats
@@ -1273,6 +1615,10 @@ CROSS JOIN key_stats ks`
 		&stats.TotalTokens,
 		&stats.CostAmount,
 		&stats.BillableAmount,
+		&stats.TodayCostAmount,
+		&stats.TodayBillable,
+		&stats.MonthCostAmount,
+		&stats.MonthBillable,
 		&stats.ClientKeyCount,
 		&stats.ActiveClientKeys,
 	); err != nil {
@@ -1281,6 +1627,9 @@ CROSS JOIN key_stats ks`
 	if stats.RequestCount > 0 {
 		stats.SuccessRate = float64(stats.SuccessCount) * 100 / float64(stats.RequestCount)
 	}
+	stats.GrossProfit = stats.BillableAmount - stats.CostAmount
+	stats.TodayGrossProfit = stats.TodayBillable - stats.TodayCostAmount
+	stats.MonthGrossProfit = stats.MonthBillable - stats.MonthCostAmount
 	return stats, nil
 }
 
@@ -1307,6 +1656,7 @@ SELECT EXISTS (
 SELECT m.id, m.public_name, m.provider_id, p.name, m.upstream_model, m.route_strategy, m.is_enabled,
        m.max_tokens, m.temperature::float8, m.timeout_seconds,
        m.cost_input_per_1m::float8, m.cost_output_per_1m::float8, m.sale_input_per_1m::float8, m.sale_output_per_1m::float8,
+       m.reserve_multiplier::float8, m.reserve_min_amount::float8,
        m.metadata, m.created_at, m.updated_at
 FROM models m
 JOIN providers p ON p.id = m.provider_id
@@ -1363,6 +1713,8 @@ ORDER BY m.public_name ASC`
 			&item.CostOutputPer1M,
 			&item.SaleInputPer1M,
 			&item.SaleOutputPer1M,
+			&item.ReserveMultiplier,
+			&item.ReserveMinAmount,
 			&rawMetadata,
 			&item.CreatedAt,
 			&item.UpdatedAt,
@@ -1384,13 +1736,18 @@ func (s *Store) ListTenantRequestLogs(ctx context.Context, tenantID int64, input
 	return s.ListRequestLogs(ctx, input)
 }
 
+func (s *Store) ExportTenantRequestLogs(ctx context.Context, tenantID int64, input entity.ListRequestLogsInput) ([]entity.RequestLog, error) {
+	input.TenantID = tenantID
+	return s.ExportRequestLogs(ctx, input)
+}
+
 func (s *Store) GetTenantRequestLog(ctx context.Context, tenantID int64, id int64) (entity.RequestLogDetail, error) {
 	const query = `
 SELECT rl.id, rl.trace_id, rl.request_type, rl.model_public_name, rl.upstream_model,
        COALESCE(rl.provider_id, 0), COALESCE(p.name, ''), COALESCE(rl.provider_key_id, 0), COALESCE(pk.name, ''),
        COALESCE(rl.client_api_key_id, 0), COALESCE(cak.name, ''),
        COALESCE(HOST(rl.client_ip), ''), rl.request_method, rl.request_path, rl.http_status, rl.success, rl.latency_ms,
-       rl.prompt_tokens, rl.completion_tokens, rl.total_tokens, rl.cost_amount::float8, rl.billable_amount::float8, rl.error_type, rl.error_message,
+       rl.prompt_tokens, rl.completion_tokens, rl.total_tokens, rl.reserved_amount::float8, rl.cost_amount::float8, rl.billable_amount::float8, rl.error_type, rl.error_message,
        rl.created_at, rl.request_payload, rl.response_payload, rl.metadata
 FROM request_logs rl
 LEFT JOIN providers p ON p.id = rl.provider_id
@@ -1426,6 +1783,7 @@ WHERE rl.id = $1
 		&item.PromptTokens,
 		&item.CompletionTokens,
 		&item.TotalTokens,
+		&item.ReservedAmount,
 		&item.CostAmount,
 		&item.BillableAmount,
 		&item.ErrorType,
@@ -1504,7 +1862,7 @@ SELECT rl.id, rl.trace_id, rl.request_type, rl.model_public_name, rl.upstream_mo
        COALESCE(rl.provider_id, 0), COALESCE(p.name, ''), COALESCE(rl.provider_key_id, 0), COALESCE(pk.name, ''),
        COALESCE(rl.client_api_key_id, 0), COALESCE(cak.name, ''),
        COALESCE(HOST(rl.client_ip), ''), rl.request_method, rl.request_path, rl.http_status, rl.success, rl.latency_ms,
-       rl.prompt_tokens, rl.completion_tokens, rl.total_tokens, rl.cost_amount::float8, rl.billable_amount::float8, rl.error_type, rl.error_message,
+       rl.prompt_tokens, rl.completion_tokens, rl.total_tokens, rl.reserved_amount::float8, rl.cost_amount::float8, rl.billable_amount::float8, rl.error_type, rl.error_message,
        rl.created_at
 FROM request_logs rl
 LEFT JOIN providers p ON p.id = rl.provider_id
@@ -1544,6 +1902,7 @@ LIMIT $` + strconv.Itoa(len(args)-1) + ` OFFSET $` + strconv.Itoa(len(args))
 			&item.PromptTokens,
 			&item.CompletionTokens,
 			&item.TotalTokens,
+			&item.ReservedAmount,
 			&item.CostAmount,
 			&item.BillableAmount,
 			&item.ErrorType,
@@ -1574,7 +1933,7 @@ SELECT rl.id, rl.trace_id, rl.request_type, rl.model_public_name, rl.upstream_mo
        COALESCE(rl.provider_id, 0), COALESCE(p.name, ''), COALESCE(rl.provider_key_id, 0), COALESCE(pk.name, ''),
        COALESCE(rl.client_api_key_id, 0), COALESCE(cak.name, ''),
        COALESCE(HOST(rl.client_ip), ''), rl.request_method, rl.request_path, rl.http_status, rl.success, rl.latency_ms,
-       rl.prompt_tokens, rl.completion_tokens, rl.total_tokens, rl.cost_amount::float8, rl.billable_amount::float8, rl.error_type, rl.error_message,
+       rl.prompt_tokens, rl.completion_tokens, rl.total_tokens, rl.reserved_amount::float8, rl.cost_amount::float8, rl.billable_amount::float8, rl.error_type, rl.error_message,
        rl.created_at
 FROM request_logs rl
 LEFT JOIN providers p ON p.id = rl.provider_id
@@ -1599,7 +1958,7 @@ SELECT rl.id, rl.trace_id, rl.request_type, rl.model_public_name, rl.upstream_mo
        COALESCE(rl.provider_id, 0), COALESCE(p.name, ''), COALESCE(rl.provider_key_id, 0), COALESCE(pk.name, ''),
        COALESCE(rl.client_api_key_id, 0), COALESCE(cak.name, ''),
        COALESCE(HOST(rl.client_ip), ''), rl.request_method, rl.request_path, rl.http_status, rl.success, rl.latency_ms,
-       rl.prompt_tokens, rl.completion_tokens, rl.total_tokens, rl.cost_amount::float8, rl.billable_amount::float8, rl.error_type, rl.error_message,
+       rl.prompt_tokens, rl.completion_tokens, rl.total_tokens, rl.reserved_amount::float8, rl.cost_amount::float8, rl.billable_amount::float8, rl.error_type, rl.error_message,
        rl.created_at, rl.request_payload, rl.response_payload, rl.metadata
 FROM request_logs rl
 LEFT JOIN providers p ON p.id = rl.provider_id
@@ -1629,6 +1988,7 @@ WHERE rl.id = $1`
 		&item.PromptTokens,
 		&item.CompletionTokens,
 		&item.TotalTokens,
+		&item.ReservedAmount,
 		&item.CostAmount,
 		&item.BillableAmount,
 		&item.ErrorType,
@@ -1674,6 +2034,20 @@ request_stats AS (
         COALESCE(SUM(billable_amount), 0)::float8 AS billable_amount
     FROM request_logs
     WHERE created_at >= NOW() - make_interval(hours => $1)
+),
+today_billing AS (
+    SELECT
+        COALESCE(SUM(cost_amount), 0)::float8 AS cost_amount,
+        COALESCE(SUM(billable_amount), 0)::float8 AS billable_amount
+    FROM request_logs
+    WHERE created_at >= date_trunc('day', NOW())
+),
+month_billing AS (
+    SELECT
+        COALESCE(SUM(cost_amount), 0)::float8 AS cost_amount,
+        COALESCE(SUM(billable_amount), 0)::float8 AS billable_amount
+    FROM request_logs
+    WHERE created_at >= date_trunc('month', NOW())
 )
 SELECT
     rc.provider_count,
@@ -1691,9 +2065,15 @@ SELECT
     rs.completion_tokens,
     rs.total_tokens,
     rs.cost_amount,
-    rs.billable_amount
+    rs.billable_amount,
+    tb.cost_amount,
+    tb.billable_amount,
+    mb.cost_amount,
+    mb.billable_amount
 FROM resource_counts rc
-CROSS JOIN request_stats rs`
+CROSS JOIN request_stats rs
+CROSS JOIN today_billing tb
+CROSS JOIN month_billing mb`
 
 	stats := entity.DashboardStats{
 		WindowHours:    windowHours,
@@ -1720,11 +2100,18 @@ CROSS JOIN request_stats rs`
 		&stats.TotalTokens,
 		&stats.CostAmount,
 		&stats.BillableAmount,
+		&stats.TodayCostAmount,
+		&stats.TodayBillableAmount,
+		&stats.MonthCostAmount,
+		&stats.MonthBillableAmount,
 	)
 	if err != nil {
 		return entity.DashboardStats{}, fmt.Errorf("query dashboard stats summary: %w", err)
 	}
 	stats.SuccessRate = calculateSuccessRate(stats.SuccessCount, stats.RequestCount)
+	stats.GrossProfit = stats.BillableAmount - stats.CostAmount
+	stats.TodayGrossProfit = stats.TodayBillableAmount - stats.TodayCostAmount
+	stats.MonthGrossProfit = stats.MonthBillableAmount - stats.MonthCostAmount
 
 	const topModelsQuery = `
 SELECT
@@ -1857,19 +2244,266 @@ LIMIT 5`
 	return stats, nil
 }
 
-func (s *Store) CreateRequestLog(ctx context.Context, input entity.CreateRequestLogInput) error {
+func (s *Store) GetTenantBillingReconciliation(ctx context.Context) ([]entity.TenantBillingReconciliation, error) {
+	const query = `
+WITH ledger AS (
+    SELECT
+        tenant_id,
+        COALESCE(SUM(CASE WHEN direction = 'credit' THEN amount ELSE 0 END), 0)::float8 AS ledger_credit_amount,
+        COALESCE(SUM(CASE WHEN direction = 'debit' THEN amount ELSE 0 END), 0)::float8 AS ledger_debit_amount
+    FROM tenant_wallet_ledger
+    GROUP BY tenant_id
+),
+logs AS (
+    SELECT
+        cak.tenant_id,
+        COALESCE(SUM(rl.billable_amount), 0)::float8 AS log_billable_amount,
+        COALESCE(SUM(rl.cost_amount), 0)::float8 AS log_cost_amount
+    FROM request_logs rl
+    JOIN client_api_keys cak ON cak.id = rl.client_api_key_id
+    GROUP BY cak.tenant_id
+)
+SELECT
+    t.id,
+    t.name,
+    t.wallet_balance::float8,
+    COALESCE(l.ledger_credit_amount, 0)::float8,
+    COALESCE(l.ledger_debit_amount, 0)::float8,
+    (COALESCE(l.ledger_credit_amount, 0) - COALESCE(l.ledger_debit_amount, 0))::float8 AS ledger_net_amount,
+    COALESCE(g.log_billable_amount, 0)::float8,
+    COALESCE(g.log_cost_amount, 0)::float8
+FROM tenants t
+LEFT JOIN ledger l ON l.tenant_id = t.id
+LEFT JOIN logs g ON g.tenant_id = t.id
+ORDER BY t.id DESC`
+
+	rows, err := s.pool.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("query tenant billing reconciliation: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]entity.TenantBillingReconciliation, 0)
+	for rows.Next() {
+		var item entity.TenantBillingReconciliation
+		if err := rows.Scan(
+			&item.TenantID,
+			&item.TenantName,
+			&item.WalletBalance,
+			&item.LedgerCreditAmount,
+			&item.LedgerDebitAmount,
+			&item.LedgerNetAmount,
+			&item.LogBillableAmount,
+			&item.LogCostAmount,
+		); err != nil {
+			return nil, fmt.Errorf("scan tenant billing reconciliation: %w", err)
+		}
+
+		item.WalletVsLedgerDiff = roundCurrency(item.WalletBalance - item.LedgerNetAmount)
+		item.LedgerVsLogsDiff = roundCurrency(item.LedgerDebitAmount - item.LogBillableAmount)
+		item.IsWalletBalanced = isCurrencyZero(item.WalletVsLedgerDiff)
+		item.IsBillingBalanced = isCurrencyZero(item.LedgerVsLogsDiff)
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate tenant billing reconciliation: %w", err)
+	}
+
+	return items, nil
+}
+
+func (s *Store) GetProviderRequestAnomalies(ctx context.Context, since time.Time, minRequests int, rateLimitedThreshold float64, serverErrorThreshold float64) ([]entity.ProviderRequestAnomaly, error) {
+	const query = `
+SELECT
+    rl.provider_id,
+    COALESCE(p.name, 'Unknown Provider') AS provider_name,
+    COUNT(*)::bigint AS total_requests,
+    COUNT(*) FILTER (WHERE rl.http_status = 429)::bigint AS rate_limited_count,
+    COUNT(*) FILTER (WHERE rl.http_status >= 500)::bigint AS server_error_count
+FROM request_logs rl
+LEFT JOIN providers p ON p.id = rl.provider_id
+WHERE rl.created_at >= $1
+  AND rl.provider_id IS NOT NULL
+GROUP BY rl.provider_id, COALESCE(p.name, 'Unknown Provider')
+HAVING COUNT(*) >= $2
+ORDER BY total_requests DESC, provider_name ASC`
+
+	rows, err := s.pool.Query(ctx, query, since, minRequests)
+	if err != nil {
+		return nil, fmt.Errorf("query provider request anomalies: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]entity.ProviderRequestAnomaly, 0)
+	for rows.Next() {
+		var item entity.ProviderRequestAnomaly
+		if err := rows.Scan(
+			&item.ProviderID,
+			&item.ProviderName,
+			&item.TotalRequests,
+			&item.RateLimitedCount,
+			&item.ServerErrorCount,
+		); err != nil {
+			return nil, fmt.Errorf("scan provider request anomaly: %w", err)
+		}
+
+		if item.TotalRequests > 0 {
+			item.RateLimitedRatio = float64(item.RateLimitedCount) / float64(item.TotalRequests)
+			item.ServerErrorRatio = float64(item.ServerErrorCount) / float64(item.TotalRequests)
+		}
+		item.IsRateLimitedAnomalous = item.RateLimitedRatio >= rateLimitedThreshold
+		item.IsServerErrorAnomalous = item.ServerErrorRatio >= serverErrorThreshold
+		if item.IsRateLimitedAnomalous || item.IsServerErrorAnomalous {
+			items = append(items, item)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate provider request anomalies: %w", err)
+	}
+
+	return items, nil
+}
+
+func (s *Store) GetTenantWalletBlockAnomalies(ctx context.Context, since time.Time, walletBlockThreshold int, reserveBlockThreshold int) ([]entity.TenantWalletBlockAnomaly, error) {
+	const query = `
+SELECT
+    t.id,
+    t.name,
+    COUNT(*) FILTER (WHERE rl.error_type IN ('wallet_empty', 'wallet_below_minimum'))::bigint AS wallet_blocked_count,
+    COUNT(*) FILTER (WHERE rl.error_type = 'wallet_reserve_insufficient')::bigint AS reserve_blocked_count
+FROM request_logs rl
+JOIN client_api_keys cak ON cak.id = rl.client_api_key_id
+JOIN tenants t ON t.id = cak.tenant_id
+WHERE rl.created_at >= $1
+  AND rl.error_type IN ('wallet_empty', 'wallet_below_minimum', 'wallet_reserve_insufficient')
+GROUP BY t.id, t.name
+ORDER BY t.id DESC`
+
+	rows, err := s.pool.Query(ctx, query, since)
+	if err != nil {
+		return nil, fmt.Errorf("query tenant wallet block anomalies: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]entity.TenantWalletBlockAnomaly, 0)
+	for rows.Next() {
+		var item entity.TenantWalletBlockAnomaly
+		if err := rows.Scan(
+			&item.TenantID,
+			&item.TenantName,
+			&item.WalletBlockedCount,
+			&item.ReserveBlockedCount,
+		); err != nil {
+			return nil, fmt.Errorf("scan tenant wallet block anomaly: %w", err)
+		}
+		item.IsWalletBlockedAnomalous = item.WalletBlockedCount >= int64(walletBlockThreshold)
+		item.IsReserveBlockedAnomalous = item.ReserveBlockedCount >= int64(reserveBlockThreshold)
+		if item.IsWalletBlockedAnomalous || item.IsReserveBlockedAnomalous {
+			items = append(items, item)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate tenant wallet block anomalies: %w", err)
+	}
+
+	return items, nil
+}
+
+func (s *Store) GetTenantBillingDebitAnomalies(ctx context.Context, since time.Time, minCount int, minBillableAmount float64) ([]entity.TenantBillingDebitAnomaly, error) {
+	const query = `
+SELECT
+    t.id,
+    t.name,
+    COUNT(*)::bigint AS missing_debit_count,
+    COALESCE(SUM(rl.billable_amount), 0)::float8 AS missing_billable_amount,
+    COALESCE(SUM(rl.cost_amount), 0)::float8 AS missing_cost_amount
+FROM request_logs rl
+JOIN client_api_keys cak ON cak.id = rl.client_api_key_id
+JOIN tenants t ON t.id = cak.tenant_id
+LEFT JOIN tenant_wallet_ledger twl ON twl.request_log_id = rl.id AND twl.direction = 'debit'
+WHERE rl.created_at >= $1
+  AND rl.success = TRUE
+  AND rl.billable_amount > 0
+  AND twl.id IS NULL
+GROUP BY t.id, t.name
+ORDER BY missing_billable_amount DESC, missing_debit_count DESC, t.id ASC`
+
+	rows, err := s.pool.Query(ctx, query, since)
+	if err != nil {
+		return nil, fmt.Errorf("query tenant billing debit anomalies: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]entity.TenantBillingDebitAnomaly, 0)
+	for rows.Next() {
+		var item entity.TenantBillingDebitAnomaly
+		if err := rows.Scan(
+			&item.TenantID,
+			&item.TenantName,
+			&item.MissingDebitCount,
+			&item.MissingBillableAmount,
+			&item.MissingCostAmount,
+		); err != nil {
+			return nil, fmt.Errorf("scan tenant billing debit anomaly: %w", err)
+		}
+		item.IsCountAnomalous = item.MissingDebitCount >= int64(minCount)
+		item.IsBillableAmountAnomalous = item.MissingBillableAmount >= minBillableAmount
+		if item.IsCountAnomalous || item.IsBillableAmountAnomalous {
+			items = append(items, item)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate tenant billing debit anomalies: %w", err)
+	}
+
+	return items, nil
+}
+
+func (s *Store) CreateAdminActionLog(ctx context.Context, input entity.CreateAdminActionLogInput) error {
+	const query = `
+INSERT INTO admin_action_logs (
+    admin_user_id, admin_username, admin_display_name, auth_mode, action, resource_type, resource_id,
+    resource_name, request_method, request_path, client_ip, metadata
+) VALUES (
+    NULLIF($1, 0), $2, $3, $4, $5, $6, NULLIF($7, 0), $8, $9, $10, NULLIF($11, '')::inet, $12
+)`
+
+	if _, err := s.pool.Exec(
+		ctx,
+		query,
+		input.AdminUserID,
+		input.AdminUsername,
+		input.AdminDisplayName,
+		input.AuthMode,
+		input.Action,
+		input.ResourceType,
+		input.ResourceID,
+		input.ResourceName,
+		input.RequestMethod,
+		input.RequestPath,
+		input.ClientIP,
+		normalizeJSON(input.Metadata),
+	); err != nil {
+		return fmt.Errorf("insert admin action log: %w", err)
+	}
+
+	return nil
+}
+
+func (s *Store) CreateRequestLog(ctx context.Context, input entity.CreateRequestLogInput) (int64, error) {
 	const query = `
 INSERT INTO request_logs (
     trace_id, request_type, model_public_name, upstream_model, provider_id, provider_key_id, client_api_key_id,
     client_ip, request_method, request_path, http_status, success, latency_ms, prompt_tokens,
-    completion_tokens, total_tokens, estimated_cost, cost_amount, billable_amount, error_type, error_message,
+    completion_tokens, total_tokens, reserved_amount, estimated_cost, cost_amount, billable_amount, error_type, error_message,
     request_payload, response_payload, metadata
 ) VALUES (
     $1, $2, $3, $4, NULLIF($5, 0), NULLIF($6, 0), NULLIF($7, 0), NULLIF($8, '')::inet, $9, $10, $11, $12, $13,
-    $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24
-)`
+    $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25
+) RETURNING id`
 
-	_, err := s.pool.Exec(
+	var id int64
+	err := s.pool.QueryRow(
 		ctx,
 		query,
 		input.TraceID,
@@ -1888,6 +2522,7 @@ INSERT INTO request_logs (
 		input.PromptTokens,
 		input.CompletionTokens,
 		input.TotalTokens,
+		input.ReservedAmount,
 		input.BillableAmount,
 		input.CostAmount,
 		input.BillableAmount,
@@ -1896,16 +2531,16 @@ INSERT INTO request_logs (
 		normalizeJSON(input.RequestPayload),
 		normalizeJSON(input.ResponsePayload),
 		normalizeJSON(input.Metadata),
-	)
+	).Scan(&id)
 	if err != nil {
-		return fmt.Errorf("insert request log: %w", err)
+		return 0, fmt.Errorf("insert request log: %w", err)
 	}
 
-	return nil
+	return id, nil
 }
 
-func (s *Store) DeductTenantWalletUsage(ctx context.Context, clientAPIKeyID int64, amount float64, note string) error {
-	if clientAPIKeyID <= 0 || amount <= 0 {
+func (s *Store) DeductTenantWalletUsage(ctx context.Context, input entity.TenantWalletUsageDebitInput) error {
+	if input.ClientAPIKeyID <= 0 || input.BillableAmount <= 0 {
 		return nil
 	}
 
@@ -1922,7 +2557,7 @@ SELECT t.id, t.wallet_balance::float8
 FROM client_api_keys cak
 JOIN tenants t ON t.id = cak.tenant_id
 WHERE cak.id = $1
-FOR UPDATE`, clientAPIKeyID).Scan(&tenantID, &before)
+FOR UPDATE`, input.ClientAPIKeyID).Scan(&tenantID, &before)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
@@ -1930,7 +2565,7 @@ FOR UPDATE`, clientAPIKeyID).Scan(&tenantID, &before)
 		return fmt.Errorf("load tenant wallet for debit: %w", err)
 	}
 
-	after := before - amount
+	after := before - input.BillableAmount
 	if after < 0 {
 		after = 0
 	}
@@ -1941,13 +2576,21 @@ FOR UPDATE`, clientAPIKeyID).Scan(&tenantID, &before)
 
 	if _, err := tx.Exec(ctx, `
 INSERT INTO tenant_wallet_ledger (
-    tenant_id, direction, amount, balance_before, balance_after, note, operator_type
-) VALUES ($1, 'debit', $2, $3, $4, $5, 'system')`,
+    tenant_id, direction, amount, balance_before, balance_after, note, operator_type,
+    request_log_id, trace_id, model_public_name, total_tokens, reserved_amount, cost_amount, billable_amount
+) VALUES ($1, 'debit', $2, $3, $4, $5, 'system', NULLIF($6, 0), $7, $8, $9, $10, $11, $12)`,
 		tenantID,
-		amount,
+		input.BillableAmount,
 		before,
 		after,
-		note,
+		input.Note,
+		input.RequestLogID,
+		input.TraceID,
+		input.ModelPublicName,
+		input.TotalTokens,
+		input.ReservedAmount,
+		input.CostAmount,
+		input.BillableAmount,
 	); err != nil {
 		return fmt.Errorf("insert debit wallet ledger: %w", err)
 	}
@@ -2019,6 +2662,7 @@ func scanClientAPIKey(scanner interface {
 		&item.TenantID,
 		&item.TenantName,
 		&item.TenantWalletBalance,
+		&item.TenantMinAvailableBalance,
 		&item.RPMLimit,
 		&item.DailyRequestLimit,
 		&item.DailyTokenLimit,
@@ -2046,7 +2690,7 @@ func scanClientAPIKey(scanner interface {
 func (s *Store) getClientAPIKeyByID(ctx context.Context, id int64) (entity.ClientAPIKey, error) {
 	const query = `
 SELECT cak.id, cak.name, cak.masked_key, cak.status, cak.description,
-       COALESCE(cak.tenant_id, 0), COALESCE(t.name, ''), COALESCE(t.wallet_balance, 0)::float8,
+       COALESCE(cak.tenant_id, 0), COALESCE(t.name, ''), COALESCE(t.wallet_balance, 0)::float8, COALESCE(t.min_available_balance, 0)::float8,
        cak.rpm_limit, cak.daily_request_limit, cak.daily_token_limit,
        cak.daily_cost_limit::float8, cak.monthly_cost_limit::float8, cak.warning_threshold::float8,
        COALESCE(model_access.allowed_model_ids, ARRAY[]::bigint[]),
@@ -2309,6 +2953,7 @@ func scanRequestLogs(rows pgx.Rows) ([]entity.RequestLog, error) {
 			&item.PromptTokens,
 			&item.CompletionTokens,
 			&item.TotalTokens,
+			&item.ReservedAmount,
 			&item.CostAmount,
 			&item.BillableAmount,
 			&item.ErrorType,
@@ -2325,4 +2970,12 @@ func scanRequestLogs(rows pgx.Rows) ([]entity.RequestLog, error) {
 	}
 
 	return items, nil
+}
+
+func roundCurrency(value float64) float64 {
+	return math.Round(value*10000) / 10000
+}
+
+func isCurrencyZero(value float64) bool {
+	return math.Abs(value) < 0.0001
 }

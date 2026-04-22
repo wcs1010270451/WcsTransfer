@@ -1,13 +1,15 @@
 import axios from "axios";
 import useSettingsStore from "../store/settingsStore";
 import usePortalAuthStore from "../store/portalAuthStore";
+import useAdminAuthStore from "../store/adminAuthStore";
 
 const createClient = () => {
-  const { apiBaseUrl, adminToken } = useSettingsStore.getState();
+  const { apiBaseUrl } = useSettingsStore.getState();
+  const { token } = useAdminAuthStore.getState();
   const headers = {};
 
-  if (adminToken) {
-    headers.Authorization = `Bearer ${adminToken}`;
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
   }
 
   return axios.create({
@@ -17,13 +19,13 @@ const createClient = () => {
 };
 
 const createFetchHeaders = () => {
-  const { adminToken } = useSettingsStore.getState();
+  const { token } = useAdminAuthStore.getState();
   const headers = {
     "Content-Type": "application/json",
   };
 
-  if (adminToken) {
-    headers.Authorization = `Bearer ${adminToken}`;
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
   }
 
   return headers;
@@ -49,6 +51,17 @@ export const fetchHealth = async () => {
   return response.data;
 };
 
+export const loginAdminUser = async (payload) => {
+  const { apiBaseUrl } = useSettingsStore.getState();
+  const response = await axios.post(`${apiBaseUrl}/admin/auth/login`, payload);
+  return response.data;
+};
+
+export const fetchAdminMe = async () => {
+  const response = await createClient().get("/admin/me");
+  return response.data;
+};
+
 export const fetchProviders = async () => {
   const response = await createClient().get("/admin/providers");
   return response.data;
@@ -59,13 +72,56 @@ export const fetchTenants = async () => {
   return response.data;
 };
 
+export const createTenant = async (payload) => {
+  const response = await createClient().post("/admin/tenants", payload);
+  return response.data;
+};
+
 export const updateTenant = async (id, payload) => {
   const response = await createClient().put(`/admin/tenants/${id}`, payload);
   return response.data;
 };
 
+export const fetchTenantUsers = async (id) => {
+  const response = await createClient().get(`/admin/tenants/${id}/users`);
+  return response.data;
+};
+
+export const createTenantUser = async (id, payload) => {
+  const response = await createClient().post(`/admin/tenants/${id}/users`, payload);
+  return response.data;
+};
+
+export const updateTenantUserStatus = async (tenantId, userId, payload) => {
+  const response = await createClient().put(`/admin/tenants/${tenantId}/users/${userId}/status`, payload);
+  return response.data;
+};
+
+export const resetTenantUserPassword = async (tenantId, userId, payload) => {
+  const response = await createClient().post(`/admin/tenants/${tenantId}/users/${userId}/reset-password`, payload);
+  return response.data;
+};
+
 export const adjustTenantWallet = async (id, payload) => {
   const response = await createClient().post(`/admin/tenants/${id}/wallet/adjust`, payload);
+  return response.data;
+};
+
+export const correctTenantWallet = async (id, payload) => {
+  const response = await createClient().post(`/admin/tenants/${id}/wallet/correct`, payload);
+  return response.data;
+};
+
+export const fetchTenantWalletLedger = async (id, params = { page: 1, page_size: 20 }) => {
+  const response = await createClient().get(`/admin/tenants/${id}/wallet/ledger`, { params });
+  return response.data;
+};
+
+export const exportTenantBilling = async (id, params = {}) => {
+  const response = await createClient().get(`/admin/tenants/${id}/billing/export`, {
+    params,
+    responseType: "blob",
+  });
   return response.data;
 };
 
@@ -448,12 +504,6 @@ export const debugAnthropicMessagesStream = async (payload, options = {}) => {
   };
 };
 
-export const registerPortalUser = async (payload) => {
-  const { apiBaseUrl } = useSettingsStore.getState();
-  const response = await axios.post(`${apiBaseUrl}/portal/auth/register`, payload);
-  return response.data;
-};
-
 export const loginPortalUser = async (payload) => {
   const { apiBaseUrl } = useSettingsStore.getState();
   const response = await axios.post(`${apiBaseUrl}/portal/auth/login`, payload);
@@ -472,6 +522,19 @@ export const fetchPortalClientKeys = async () => {
 
 export const fetchPortalStats = async () => {
   const response = await createPortalClient().get("/portal/stats");
+  return response.data;
+};
+
+export const fetchPortalWalletLedger = async (params = { page: 1, page_size: 20 }) => {
+  const response = await createPortalClient().get("/portal/wallet/ledger", { params });
+  return response.data;
+};
+
+export const exportPortalBilling = async (params = {}) => {
+  const response = await createPortalClient().get("/portal/billing/export", {
+    params,
+    responseType: "blob",
+  });
   return response.data;
 };
 

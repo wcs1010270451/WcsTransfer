@@ -3,9 +3,9 @@ services:
     image: postgres:16-alpine
     container_name: wcstransfer-postgres
     environment:
-      POSTGRES_DB: wcstransfer
-      POSTGRES_USER: wcstransfer
-      POSTGRES_PASSWORD: wcstransfer
+      POSTGRES_DB: ${POSTGRES_DB:-wcstransfer}
+      POSTGRES_USER: ${POSTGRES_USER:-wcstransfer}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-wcstransfer}
     ports:
       - "5432:5432"
     volumes:
@@ -17,8 +17,16 @@ services:
       - ./backend/migrations/0005_model_pricing_and_client_budgets.up.sql:/docker-entrypoint-initdb.d/0005_model_pricing_and_client_budgets.sql:ro
       - ./backend/migrations/0006_add_anthropic_provider_type.up.sql:/docker-entrypoint-initdb.d/0006_add_anthropic_provider_type.sql:ro
       - ./backend/migrations/0007_tenants_and_tenant_users.up.sql:/docker-entrypoint-initdb.d/0007_tenants_and_tenant_users.sql:ro
+      - ./backend/migrations/0008_tenant_approval_controls.up.sql:/docker-entrypoint-initdb.d/0008_tenant_approval_controls.sql:ro
+      - ./backend/migrations/0009_tenant_wallet.up.sql:/docker-entrypoint-initdb.d/0009_tenant_wallet.sql:ro
+      - ./backend/migrations/0010_dual_model_pricing_and_billing.up.sql:/docker-entrypoint-initdb.d/0010_dual_model_pricing_and_billing.sql:ro
+      - ./backend/migrations/0011_wallet_ledger_request_link.up.sql:/docker-entrypoint-initdb.d/0011_wallet_ledger_request_link.sql:ro
+      - ./backend/migrations/0012_tenant_min_available_balance.up.sql:/docker-entrypoint-initdb.d/0012_tenant_min_available_balance.sql:ro
+      - ./backend/migrations/0013_reserved_amount_tracking.up.sql:/docker-entrypoint-initdb.d/0013_reserved_amount_tracking.sql:ro
+      - ./backend/migrations/0014_model_reserve_policy.up.sql:/docker-entrypoint-initdb.d/0014_model_reserve_policy.sql:ro
+      - ./backend/migrations/0015_admin_action_logs.up.sql:/docker-entrypoint-initdb.d/0015_admin_action_logs.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U wcstransfer -d wcstransfer"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-wcstransfer} -d ${POSTGRES_DB:-wcstransfer}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -45,23 +53,50 @@ services:
       dockerfile: Dockerfile
     container_name: wcstransfer-backend
     environment:
-      APP_ENV: development
-      APP_NAME: wcstransfer-gateway
-      HTTP_PORT: 8080
-      GIN_MODE: debug
-      ADMIN_TOKEN: change-me
-      AUTH_TOKEN_SECRET: change-me-portal-secret
-      DATABASE_URL: postgres://wcstransfer:wcstransfer@postgres:5432/wcstransfer?sslmode=disable
-      DATABASE_MAX_CONNS: 20
-      DATABASE_MIN_CONNS: 2
-      REDIS_ADDR: redis:6379
-      REDIS_DB: 0
-      DEPENDENCY_TIMEOUT: 3s
-      HTTP_READ_TIMEOUT: 15s
-      HTTP_WRITE_TIMEOUT: 60s
-      HTTP_SHUTDOWN_TIMEOUT: 10s
+      APP_ENV: ${APP_ENV:-development}
+      APP_NAME: ${APP_NAME:-wcstransfer-gateway}
+      HTTP_PORT: ${HTTP_PORT:-8080}
+      GIN_MODE: ${GIN_MODE:-debug}
+      ENABLE_DOCS: ${ENABLE_DOCS:-true}
+      ENABLE_ADMIN_DEBUG: ${ENABLE_ADMIN_DEBUG:-true}
+      AUTH_TOKEN_SECRET: ${AUTH_TOKEN_SECRET:-change-me-portal-secret}
+      ADMIN_BOOTSTRAP_USERNAME: ${ADMIN_BOOTSTRAP_USERNAME:-admin}
+      ADMIN_BOOTSTRAP_PASSWORD: ${ADMIN_BOOTSTRAP_PASSWORD:-ChangeThisAdminPassword123!}
+      ADMIN_BOOTSTRAP_DISPLAY_NAME: ${ADMIN_BOOTSTRAP_DISPLAY_NAME:-System Admin}
+      DATABASE_URL: postgres://${POSTGRES_USER:-wcstransfer}:${POSTGRES_PASSWORD:-wcstransfer}@postgres:5432/${POSTGRES_DB:-wcstransfer}?sslmode=disable
+      DATABASE_MAX_CONNS: ${DATABASE_MAX_CONNS:-20}
+      DATABASE_MIN_CONNS: ${DATABASE_MIN_CONNS:-2}
+      REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDIS_DB: ${REDIS_DB:-0}
+      DEPENDENCY_TIMEOUT: ${DEPENDENCY_TIMEOUT:-3s}
+      HTTP_READ_TIMEOUT: ${HTTP_READ_TIMEOUT:-15s}
+      HTTP_WRITE_TIMEOUT: ${HTTP_WRITE_TIMEOUT:-60s}
+      HTTP_SHUTDOWN_TIMEOUT: ${HTTP_SHUTDOWN_TIMEOUT:-10s}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3211,http://127.0.0.1:3211}
+      PROVIDER_ALERT_ENABLED: ${PROVIDER_ALERT_ENABLED:-false}
+      PROVIDER_ALERT_WINDOW: ${PROVIDER_ALERT_WINDOW:-5m}
+      PROVIDER_ALERT_INTERVAL: ${PROVIDER_ALERT_INTERVAL:-1m}
+      PROVIDER_ALERT_MIN_REQUESTS: ${PROVIDER_ALERT_MIN_REQUESTS:-10}
+      PROVIDER_ALERT_429_THRESHOLD: ${PROVIDER_ALERT_429_THRESHOLD:-0.2}
+      PROVIDER_ALERT_5XX_THRESHOLD: ${PROVIDER_ALERT_5XX_THRESHOLD:-0.2}
+      TENANT_WALLET_ALERT_ENABLED: ${TENANT_WALLET_ALERT_ENABLED:-false}
+      TENANT_WALLET_ALERT_WINDOW: ${TENANT_WALLET_ALERT_WINDOW:-5m}
+      TENANT_WALLET_ALERT_INTERVAL: ${TENANT_WALLET_ALERT_INTERVAL:-1m}
+      TENANT_WALLET_ALERT_MIN_BLOCKS: ${TENANT_WALLET_ALERT_MIN_BLOCKS:-5}
+      TENANT_RESERVE_ALERT_MIN_BLOCKS: ${TENANT_RESERVE_ALERT_MIN_BLOCKS:-5}
+      BILLING_ALERT_ENABLED: ${BILLING_ALERT_ENABLED:-false}
+      BILLING_ALERT_WINDOW: ${BILLING_ALERT_WINDOW:-10m}
+      BILLING_ALERT_INTERVAL: ${BILLING_ALERT_INTERVAL:-1m}
+      BILLING_ALERT_MIN_COUNT: ${BILLING_ALERT_MIN_COUNT:-1}
+      BILLING_ALERT_MIN_AMOUNT: ${BILLING_ALERT_MIN_AMOUNT:-0.01}
+      DEPENDENCY_ALERT_ENABLED: ${DEPENDENCY_ALERT_ENABLED:-false}
+      DEPENDENCY_ALERT_INTERVAL: ${DEPENDENCY_ALERT_INTERVAL:-1m}
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+      ALERT_WEBHOOK_PROVIDER: ${ALERT_WEBHOOK_PROVIDER:-generic}
+      ALERT_WEBHOOK_TIMEOUT: ${ALERT_WEBHOOK_TIMEOUT:-5s}
     ports:
-      - "8080:8080"
+      - "${HTTP_PORT:-8080}:8080"
     depends_on:
       postgres:
         condition: service_healthy

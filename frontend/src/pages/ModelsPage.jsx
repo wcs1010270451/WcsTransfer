@@ -62,6 +62,8 @@ export default function ModelsPage() {
       cost_output_per_1m: 0,
       sale_input_per_1m: 0,
       sale_output_per_1m: 0,
+      reserve_multiplier: 1,
+      reserve_min_amount: 0,
       metadata: "{}",
     });
     setOpen(true);
@@ -82,6 +84,8 @@ export default function ModelsPage() {
       cost_output_per_1m: record.cost_output_per_1m,
       sale_input_per_1m: record.sale_input_per_1m,
       sale_output_per_1m: record.sale_output_per_1m,
+      reserve_multiplier: record.reserve_multiplier,
+      reserve_min_amount: record.reserve_min_amount,
       metadata: formatJSON(record.metadata),
     });
     setOpen(true);
@@ -133,6 +137,8 @@ export default function ModelsPage() {
         cost_output_per_1m: record.cost_output_per_1m,
         sale_input_per_1m: record.sale_input_per_1m,
         sale_output_per_1m: record.sale_output_per_1m,
+        reserve_multiplier: record.reserve_multiplier,
+        reserve_min_amount: record.reserve_min_amount,
         metadata: record.metadata || {},
       });
       message.success("模型状态已更新");
@@ -191,6 +197,18 @@ export default function ModelsPage() {
               render: (value) => Number(value || 0).toFixed(4),
             },
             {
+              title: "预留倍率",
+              dataIndex: "reserve_multiplier",
+              key: "reserve_multiplier",
+              render: (value) => Number(value || 1).toFixed(2),
+            },
+            {
+              title: "最低预留 $",
+              dataIndex: "reserve_min_amount",
+              key: "reserve_min_amount",
+              render: (value) => Number(value || 0).toFixed(4),
+            },
+            {
               title: "状态",
               dataIndex: "is_enabled",
               key: "is_enabled",
@@ -238,6 +256,8 @@ export default function ModelsPage() {
             cost_output_per_1m: 0,
             sale_input_per_1m: 0,
             sale_output_per_1m: 0,
+            reserve_multiplier: 1,
+            reserve_min_amount: 0,
           }}
         >
           <Form.Item label="公共模型名" name="public_name" rules={[{ required: true }]}>
@@ -280,6 +300,12 @@ export default function ModelsPage() {
             <InputNumber min={0} step={0.0001} style={{ width: "100%" }} />
           </Form.Item>
           <Form.Item label="每百万输出 Token 售价" name="sale_output_per_1m" extra="对客户计费使用的输出单价，单位：美元 / 1,000,000 输出 tokens">
+            <InputNumber min={0} step={0.0001} style={{ width: "100%" }} />
+          </Form.Item>
+          <Form.Item label="预留金额倍率" name="reserve_multiplier" extra="请求前预留金额 = 估算计费金额 × 倍率，默认 1">
+            <InputNumber min={0.0001} step={0.1} style={{ width: "100%" }} />
+          </Form.Item>
+          <Form.Item label="最低预留金额（美元）" name="reserve_min_amount" extra="即使估算金额很低，也至少要求租户钱包达到这个预留值">
             <InputNumber min={0} step={0.0001} style={{ width: "100%" }} />
           </Form.Item>
           <Form.Item label="元数据 JSON" name="metadata">

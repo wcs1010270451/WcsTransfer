@@ -15,6 +15,7 @@ import { Button, Layout, Menu, Space, Tag, Typography } from "antd";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import SettingsDrawer from "../components/SettingsDrawer";
 import useSettingsStore from "../store/settingsStore";
+import useAdminAuthStore from "../store/adminAuthStore";
 
 const { Header, Content, Sider } = Layout;
 
@@ -34,7 +35,14 @@ export default function AppLayout() {
   const location = useLocation();
   const navigate = useNavigate();
   const apiBaseUrl = useSettingsStore((state) => state.apiBaseUrl);
+  const adminUser = useAdminAuthStore((state) => state.user);
+  const clearAdminSession = useAdminAuthStore((state) => state.clearSession);
   const [settingsOpen, setSettingsOpen] = useState(false);
+
+  const handleLogout = () => {
+    clearAdminSession();
+    navigate("/admin/login", { replace: true });
+  };
 
   return (
     <Layout className="app-shell">
@@ -77,9 +85,15 @@ export default function AppLayout() {
               </Typography.Title>
             </div>
           </Space>
-          <Button icon={<SettingOutlined />} onClick={() => setSettingsOpen(true)}>
-            连接设置
-          </Button>
+          <Space>
+            {adminUser?.display_name || adminUser?.username ? (
+              <Tag color="green">{adminUser.display_name || adminUser.username}</Tag>
+            ) : null}
+            <Button icon={<SettingOutlined />} onClick={() => setSettingsOpen(true)}>
+              连接设置
+            </Button>
+            <Button onClick={handleLogout}>退出</Button>
+          </Space>
         </Header>
 
         <Content className="app-content">

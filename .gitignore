@@ -1,4 +1,5 @@
 backend/bin/
+backend/cmd/server/__debug_bin.exe
 backend/.air/
 backend/.env
 backend/.env.local
@@ -6,3 +7,5 @@ frontend/node_modules/
 frontend/dist/
 .env
 .env.prod
+deploy/backup/restore-rehearsal.sql
+deploy/backup/restore-rehearsal.fixed.sql
