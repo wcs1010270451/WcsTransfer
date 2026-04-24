@@ -245,7 +245,7 @@ func (h *Handler) OpenAPI(c *gin.Context) {
 		"info": gin.H{
 			"title":       "WcsTransfer Gateway API",
 			"version":     buildinfo.Version,
-			"description": "OpenAI-compatible gateway API for chat completions and embeddings.",
+			"description": "Gateway API for OpenAI-compatible endpoints plus native Anthropic and Gemini routes.",
 		},
 		"servers": []gin.H{
 			{"url": serverURL},
@@ -379,6 +379,64 @@ func (h *Handler) OpenAPI(c *gin.Context) {
 					},
 					"responses": gin.H{
 						"200": gin.H{"description": "Anthropic messages response"},
+						"401": gin.H{"description": "Unauthorized", "content": gin.H{"application/json": gin.H{"schema": gin.H{"$ref": "#/components/schemas/Error"}}}},
+						"403": gin.H{"description": "Model forbidden", "content": gin.H{"application/json": gin.H{"schema": gin.H{"$ref": "#/components/schemas/Error"}}}},
+						"429": gin.H{"description": "Quota or budget exceeded", "content": gin.H{"application/json": gin.H{"schema": gin.H{"$ref": "#/components/schemas/Error"}}}},
+					},
+				},
+			},
+			"/v1/gemini/generate-content": gin.H{
+				"post": gin.H{
+					"summary":  "Create Gemini content with the native Google API",
+					"security": []gin.H{{"bearerAuth": []string{}}},
+					"requestBody": gin.H{
+						"required": true,
+						"content": gin.H{
+							"application/json": gin.H{
+								"schema": gin.H{
+									"type": "object",
+									"properties": gin.H{
+										"model":   gin.H{"type": "string"},
+										"contents": gin.H{},
+										"generationConfig": gin.H{"type": "object"},
+										"systemInstruction": gin.H{"type": "object"},
+									},
+									"required": []string{"model", "contents"},
+								},
+							},
+						},
+					},
+					"responses": gin.H{
+						"200": gin.H{"description": "Gemini generateContent response"},
+						"401": gin.H{"description": "Unauthorized", "content": gin.H{"application/json": gin.H{"schema": gin.H{"$ref": "#/components/schemas/Error"}}}},
+						"403": gin.H{"description": "Model forbidden", "content": gin.H{"application/json": gin.H{"schema": gin.H{"$ref": "#/components/schemas/Error"}}}},
+						"429": gin.H{"description": "Quota or budget exceeded", "content": gin.H{"application/json": gin.H{"schema": gin.H{"$ref": "#/components/schemas/Error"}}}},
+					},
+				},
+			},
+			"/v1/gemini/stream-generate-content": gin.H{
+				"post": gin.H{
+					"summary":  "Stream Gemini content with the native Google API",
+					"security": []gin.H{{"bearerAuth": []string{}}},
+					"requestBody": gin.H{
+						"required": true,
+						"content": gin.H{
+							"application/json": gin.H{
+								"schema": gin.H{
+									"type": "object",
+									"properties": gin.H{
+										"model":   gin.H{"type": "string"},
+										"contents": gin.H{},
+										"generationConfig": gin.H{"type": "object"},
+										"systemInstruction": gin.H{"type": "object"},
+									},
+									"required": []string{"model", "contents"},
+								},
+							},
+						},
+					},
+					"responses": gin.H{
+						"200": gin.H{"description": "Gemini streamGenerateContent SSE response"},
 						"401": gin.H{"description": "Unauthorized", "content": gin.H{"application/json": gin.H{"schema": gin.H{"$ref": "#/components/schemas/Error"}}}},
 						"403": gin.H{"description": "Model forbidden", "content": gin.H{"application/json": gin.H{"schema": gin.H{"$ref": "#/components/schemas/Error"}}}},
 						"429": gin.H{"description": "Quota or budget exceeded", "content": gin.H{"application/json": gin.H{"schema": gin.H{"$ref": "#/components/schemas/Error"}}}},
@@ -587,6 +645,28 @@ func (h *Handler) OpenAPI(c *gin.Context) {
 						"content":  gin.H{"application/json": gin.H{"schema": gin.H{"type": "object"}}},
 					},
 					"responses": gin.H{"200": gin.H{"description": "Debug anthropic messages response"}},
+				},
+			},
+			"/admin/debug/gemini/generate-content": gin.H{
+				"post": gin.H{
+					"summary":  "Run admin debug Gemini generateContent",
+					"security": []gin.H{{"adminAuth": []string{}}},
+					"requestBody": gin.H{
+						"required": true,
+						"content":  gin.H{"application/json": gin.H{"schema": gin.H{"type": "object"}}},
+					},
+					"responses": gin.H{"200": gin.H{"description": "Debug Gemini generateContent response"}},
+				},
+			},
+			"/admin/debug/gemini/stream-generate-content": gin.H{
+				"post": gin.H{
+					"summary":  "Run admin debug Gemini streamGenerateContent",
+					"security": []gin.H{{"adminAuth": []string{}}},
+					"requestBody": gin.H{
+						"required": true,
+						"content":  gin.H{"application/json": gin.H{"schema": gin.H{"type": "object"}}},
+					},
+					"responses": gin.H{"200": gin.H{"description": "Debug Gemini streamGenerateContent response"}},
 				},
 			},
 		},

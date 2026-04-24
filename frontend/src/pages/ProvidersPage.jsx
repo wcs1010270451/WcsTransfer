@@ -36,31 +36,49 @@ export default function ProvidersPage() {
       openai_compatible: {
         baseURL: "https://api.openai.com/v1",
         extraConfig: "{}",
-        note: "这里只填服务根路径，不要追加 /chat/completions 或 /embeddings。",
+        note: "这里只填写服务根路径，不要附加 /chat/completions 或 /embeddings。",
       },
       anthropic: {
         baseURL: "https://api.anthropic.com",
         extraConfig: JSON.stringify({ anthropic_version: "2023-06-01" }, null, 2),
-        note: "这里只填 API 主机地址，网关会自动追加 /v1/messages。",
+        note: "这里只填写 API 主机地址，网关会自动拼接 /v1/messages。",
+      },
+      gemini: {
+        baseURL: "https://generativelanguage.googleapis.com",
+        extraConfig: JSON.stringify({ gemini_api_version: "v1beta" }, null, 2),
+        note: "这里只填写 Gemini 官方 API 主机地址，网关会自动拼接 /v1beta/models/{model}:generateContent。",
       },
       openai: {
         baseURL: "https://api.openai.com/v1",
         extraConfig: "{}",
-        note: "这里只填 API 根路径，不要追加具体接口路径。",
+        note: "这里只填写 API 根路径，不要附加具体接口路径。",
       },
       azure_openai: {
         baseURL: "https://your-resource.openai.azure.com/openai",
         extraConfig: "{}",
-        note: "请确认 Azure 资源路径，这里不要追加 chat/completions。",
+        note: "请填写 Azure OpenAI 根路径，不要附加具体接口路径。",
       },
       custom: {
         baseURL: "https://api.example.com/v1",
         extraConfig: "{}",
-        note: "这里只填服务根路径，网关会在需要时自动拼接接口路径。",
+        note: "这里只填写服务根路径，网关会按所选协议自动拼接接口路径。",
       },
     }),
     [],
   );
+
+  const validateBaseURL = async (_, value) => {
+    const normalized = String(value || "").trim();
+    if (
+      normalized.includes("/chat/completions") ||
+      normalized.includes("/embeddings") ||
+      normalized.includes("/messages") ||
+      normalized.includes(":generateContent") ||
+      normalized.includes(":streamGenerateContent")
+    ) {
+      throw new Error("这里只能填写提供方根地址，不能直接填写完整接口路径。");
+    }
+  };
 
   const loadProviders = async () => {
     setLoading(true);
@@ -113,15 +131,7 @@ export default function ProvidersPage() {
     setSubmitting(true);
     try {
       const normalizedBaseURL = String(values.base_url || "").trim();
-      if (
-        normalizedBaseURL.includes("/chat/completions") ||
-        normalizedBaseURL.includes("/embeddings") ||
-        normalizedBaseURL.includes("/messages")
-      ) {
-        message.error("Base URL 只能填写服务根路径，不能填写完整接口地址");
-        setSubmitting(false);
-        return;
-      }
+      await validateBaseURL(null, normalizedBaseURL);
 
       const payload = {
         ...values,
@@ -179,8 +189,8 @@ export default function ProvidersPage() {
     <Space direction="vertical" size={24} style={{ width: "100%" }}>
       <PageHeaderCard
         eyebrow="提供方管理"
-        title="管理上游提供方和兼容接口"
-        description="每个提供方代表一个真实的上游目标。不同区域、厂商或兼容层建议拆成独立记录，方便后续路由和运维。"
+        title="管理上游提供方和协议类型"
+        description="每个提供方代表一个真实上游目标。不同厂商、区域或兼容层建议拆成独立记录，便于后续路由和运维。"
         actions={
           <Button type="primary" onClick={openCreateModal}>
             新建提供方
@@ -234,6 +244,7 @@ export default function ProvidersPage() {
               description={providerHints[providerType]?.note || "请使用提供方根地址。"}
             />
           ) : null}
+
           <Form.Item label="名称" name="name" rules={[{ required: true }]}>
             <Input />
           </Form.Item>
@@ -246,6 +257,7 @@ export default function ProvidersPage() {
               options={[
                 { label: "OpenAI 兼容", value: "openai_compatible" },
                 { label: "Anthropic", value: "anthropic" },
+                { label: "Gemini", value: "gemini" },
                 { label: "OpenAI", value: "openai" },
                 { label: "Azure OpenAI", value: "azure_openai" },
                 { label: "自定义", value: "custom" },
@@ -255,22 +267,14 @@ export default function ProvidersPage() {
           <Form.Item
             label="Base URL"
             name="base_url"
-            rules={[
-              { required: true },
-              {
-                validator: async (_, value) => {
-                  const normalized = String(value || "").trim();
-                  if (
-                    normalized.includes("/chat/completions") ||
-                    normalized.includes("/embeddings") ||
-                    normalized.includes("/messages")
-                  ) {
-                    throw new Error("这里只能填写提供方根地址，不能粘贴完整接口路径。");
-                  }
-                },
-              },
-            ]}
-            extra={providerType === "anthropic" ? "Anthropic 示例：https://api.anthropic.com" : "OpenAI 兼容示例：https://api.openai.com/v1"}
+            rules={[{ required: true }, { validator: validateBaseURL }]}
+            extra={
+              providerType === "anthropic"
+                ? "Anthropic 示例：https://api.anthropic.com"
+                : providerType === "gemini"
+                  ? "Gemini 示例：https://generativelanguage.googleapis.com"
+                  : "OpenAI 兼容示例：https://api.openai.com/v1"
+            }
           >
             <Input placeholder="https://api.example.com/v1" />
           </Form.Item>
@@ -283,11 +287,20 @@ export default function ProvidersPage() {
           <Form.Item label="附加配置 JSON" name="extra_config">
             <Input.TextArea rows={4} placeholder='{"region":"cn"}' />
           </Form.Item>
+
           {providerType === "anthropic" ? (
             <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
               Anthropic 附加配置支持 `anthropic_version` 和可选的 `anthropic_beta`。
               <br />
               <code>{`{"anthropic_version":"2023-06-01","anthropic_beta":["prompt-caching-2024-07-31"]}`}</code>
+            </Typography.Paragraph>
+          ) : null}
+
+          {providerType === "gemini" ? (
+            <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
+              Gemini 附加配置当前支持 `gemini_api_version`，默认 `v1beta`。
+              <br />
+              <code>{`{"gemini_api_version":"v1beta"}`}</code>
             </Typography.Paragraph>
           ) : null}
         </Form>

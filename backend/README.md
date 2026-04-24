@@ -58,6 +58,8 @@ Initial PostgreSQL schema migrations are available in `migrations/`:
 - `0003_client_key_quotas.down.sql`
 - `0006_add_anthropic_provider_type.up.sql`
 - `0006_add_anthropic_provider_type.down.sql`
+- `0016_add_gemini_provider_type.up.sql`
+- `0016_add_gemini_provider_type.down.sql`
 - `0007_tenants_and_tenant_users.up.sql`
 - `0007_tenants_and_tenant_users.down.sql`
 
@@ -97,10 +99,14 @@ The Compose stack starts:
 - `GET /admin/models`
 - `POST /admin/models`
 - `GET /admin/logs`
+- `POST /v1/gemini/generate-content`
+- `POST /v1/gemini/stream-generate-content`
 
 Chat proxy requests made through `/v1/chat/completions` are now written into `request_logs`.
 
 Anthropic Messages requests made through `/v1/messages` are also written into `request_logs`.
+
+Gemini native requests made through `/v1/gemini/generate-content` and `/v1/gemini/stream-generate-content` are also written into `request_logs`.
 
 Tenant users can now register and log in through:
 
@@ -154,6 +160,22 @@ To connect Claude Console / Anthropic official API:
 
 Do not set `base_url` to `https://api.anthropic.com/v1/messages`. The gateway appends `/v1/messages` automatically.
 
+## Gemini Provider Configuration
+
+To connect Gemini official API:
+
+- `provider_type`: `gemini`
+- `base_url`: `https://generativelanguage.googleapis.com`
+- `extra_config`:
+
+```json
+{
+  "gemini_api_version": "v1beta"
+}
+```
+
+Do not set `base_url` to a full endpoint like `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent`. The gateway appends the model path automatically.
+
 ## Dev Seed
 
 For local testing, you can import `scripts/dev_seed.sql`.
@@ -177,4 +199,13 @@ curl.exe -X POST http://localhost:3210/v1/messages `
   -H "Authorization: Bearer <client_api_key>" `
   -H "Content-Type: application/json" `
   -d "{\"model\":\"claude-sonnet-4\",\"max_tokens\":1024,\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}"
+```
+
+Gemini quick test:
+
+```powershell
+curl.exe -X POST http://localhost:3210/v1/gemini/generate-content `
+  -H "Authorization: Bearer <client_api_key>" `
+  -H "Content-Type: application/json" `
+  -d "{\"model\":\"gemini-2.5-pro\",\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"hello\"}]}]}"
 ```

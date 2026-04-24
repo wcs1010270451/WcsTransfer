@@ -81,6 +81,23 @@ export default function ApiDocsPage() {
       ),
     [selectedModel],
   );
+  const geminiPayload = useMemo(
+    () =>
+      JSON.stringify(
+        {
+          model: selectedModel || "gemini-2.5-pro",
+          contents: [
+            {
+              role: "user",
+              parts: [{ text: "Hello from WcsTransfer Gemini" }],
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    [selectedModel],
+  );
 
   const curlChat = `curl.exe -X POST ${apiBaseUrl}/v1/chat/completions \\
   -H "Authorization: Bearer ${authHint}" \\
@@ -91,6 +108,11 @@ export default function ApiDocsPage() {
   -H "Authorization: Bearer ${authHint}" \\
   -H "Content-Type: application/json" \\
   -d '${embeddingsPayload}'`;
+
+  const curlGemini = `curl.exe -X POST ${apiBaseUrl}/v1/gemini/generate-content \\
+  -H "Authorization: Bearer ${authHint}" \\
+  -H "Content-Type: application/json" \\
+  -d '${geminiPayload}'`;
 
   const jsExample = `const response = await fetch("${apiBaseUrl}/v1/chat/completions", {
   method: "POST",
@@ -218,6 +240,9 @@ print(response.json())`;
             { path: "/v1/models", method: "GET", note: "列出当前客户端密钥可见的模型" },
             { path: "/v1/chat/completions", method: "POST", note: "代理 OpenAI 兼容的对话补全接口" },
             { path: "/v1/embeddings", method: "POST", note: "代理 OpenAI 兼容的向量接口" },
+            { path: "/v1/messages", method: "POST", note: "代理 Anthropic 官方原生 Messages API" },
+            { path: "/v1/gemini/generate-content", method: "POST", note: "代理 Gemini 官方原生 generateContent API" },
+            { path: "/v1/gemini/stream-generate-content", method: "POST", note: "代理 Gemini 官方原生 streamGenerateContent API" },
           ]}
           columns={[
             { title: "方法", dataIndex: "method", key: "method", width: 120 },
@@ -233,10 +258,12 @@ print(response.json())`;
           items={[
             { key: "curl-chat", label: "curl 对话", children: codeBlock(curlChat) },
             { key: "curl-embeddings", label: "curl 向量", children: codeBlock(curlEmbeddings) },
+            { key: "curl-gemini", label: "curl Gemini", children: codeBlock(curlGemini) },
             { key: "javascript", label: "JavaScript", children: codeBlock(jsExample) },
             { key: "python", label: "Python", children: codeBlock(pythonExample) },
             { key: "chat-payload", label: "对话请求体", children: codeBlock(chatPayload) },
             { key: "embeddings-payload", label: "向量请求体", children: codeBlock(embeddingsPayload) },
+            { key: "gemini-payload", label: "Gemini 请求体", children: codeBlock(geminiPayload) },
           ]}
         />
       </section>

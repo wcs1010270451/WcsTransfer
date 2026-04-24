@@ -98,6 +98,8 @@ func New(cfg config.Config, deps *platform.Dependencies, stores *Stores) *gin.En
 		v1.POST("/chat/completions", openAIHandler.ChatCompletions)
 		v1.POST("/embeddings", openAIHandler.Embeddings)
 		v1.POST("/messages", openAIHandler.Messages)
+		v1.POST("/gemini/generate-content", openAIHandler.GeminiGenerateContent)
+		v1.POST("/gemini/stream-generate-content", openAIHandler.GeminiStreamGenerateContent)
 	}
 
 	adminGroup := engine.Group("/admin")
@@ -137,6 +139,8 @@ func New(cfg config.Config, deps *platform.Dependencies, stores *Stores) *gin.En
 			adminGroup.POST("/debug/chat/completions", openAIHandler.AdminDebugChatCompletions)
 			adminGroup.POST("/debug/embeddings", openAIHandler.AdminDebugEmbeddings)
 			adminGroup.POST("/debug/messages", openAIHandler.AdminDebugMessages)
+			adminGroup.POST("/debug/gemini/generate-content", openAIHandler.AdminDebugGeminiGenerateContent)
+			adminGroup.POST("/debug/gemini/stream-generate-content", openAIHandler.AdminDebugGeminiStreamGenerateContent)
 		}
 	}
 

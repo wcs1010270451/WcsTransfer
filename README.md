@@ -49,6 +49,8 @@ Available endpoints:
 - `GET /version`
 - `GET /v1/models`
 - `POST /v1/chat/completions`
+- `POST /v1/gemini/generate-content`
+- `POST /v1/gemini/stream-generate-content`
 - `POST /v1/messages`
 - `POST /portal/auth/login`
 - `GET /portal/me`
@@ -110,6 +112,7 @@ The first PostgreSQL startup automatically applies the backend migrations, inclu
 - `backend/migrations/0002_client_api_keys.up.sql`
 - `backend/migrations/0003_client_key_quotas.up.sql`
 - `backend/migrations/0006_add_anthropic_provider_type.up.sql`
+- `backend/migrations/0016_add_gemini_provider_type.up.sql`
 - `backend/migrations/0007_tenants_and_tenant_users.up.sql`
 
 In production, recommended defaults are:
@@ -167,6 +170,39 @@ curl.exe -X POST http://localhost:3210/v1/messages `
   -H "Authorization: Bearer <client_api_key>" `
   -H "Content-Type: application/json" `
   -d "{\"model\":\"claude-sonnet-4\",\"max_tokens\":1024,\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}"
+```
+
+## Gemini Provider Setup
+
+WcsTransfer now supports the Gemini official native REST API directly.
+
+Recommended provider configuration:
+
+- `provider_type`: `gemini`
+- `base_url`: `https://generativelanguage.googleapis.com`
+- `extra_config`:
+
+```json
+{
+  "gemini_api_version": "v1beta"
+}
+```
+
+Important:
+
+- do not set `base_url` to a full endpoint such as `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent`
+- the gateway appends `/v1beta/models/{model}:generateContent` automatically
+- the public gateway routes are:
+  - `POST /v1/gemini/generate-content`
+  - `POST /v1/gemini/stream-generate-content`
+
+Example public request:
+
+```powershell
+curl.exe -X POST http://localhost:3210/v1/gemini/generate-content `
+  -H "Authorization: Bearer <client_api_key>" `
+  -H "Content-Type: application/json" `
+  -d "{\"model\":\"gemini-2.5-pro\",\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"hello\"}]}]}"
 ```
 
 ## Production Deployment

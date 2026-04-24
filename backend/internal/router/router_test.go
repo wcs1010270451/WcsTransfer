@@ -2321,6 +2321,210 @@ func TestAnthropicMessagesStreamProxyRoute(t *testing.T) {
 	}
 }
 
+func TestGeminiGenerateContentProxyRoute(t *testing.T) {
+	upstreamCalled := false
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalled = true
+		if r.URL.Path != "/v1beta/models/gemini-2.5-pro-upstream:generateContent" {
+			t.Fatalf("unexpected upstream path: %s", r.URL.Path)
+		}
+		if got := r.Header.Get("x-goog-api-key"); got != "sk-test-secret" {
+			t.Fatalf("unexpected x-goog-api-key header: %s", got)
+		}
+
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode upstream body: %v", err)
+		}
+		if _, exists := payload["model"]; exists {
+			t.Fatalf("did not expect model field in upstream payload: %+v", payload)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"candidates": []map[string]any{
+				{
+					"content": map[string]any{
+						"parts": []map[string]any{
+							{"text": "Hello from Gemini"},
+						},
+					},
+				},
+			},
+			"usageMetadata": map[string]any{
+				"promptTokenCount":     18,
+				"candidatesTokenCount": 27,
+				"totalTokenCount":      45,
+			},
+		})
+	}))
+	defer upstream.Close()
+
+	cfg := config.Config{AppName: "wcstransfer-gateway", Env: "test", GinMode: "test", HTTPPort: "8080"}
+	store := &stubStore{
+		models: []entity.Model{
+			{
+				ID:                1,
+				PublicName:        "gemini-2.5-pro",
+				ProviderID:        1,
+				ProviderName:      "gemini",
+				UpstreamModel:     "gemini-2.5-pro-upstream",
+				RouteStrategy:     "fixed",
+				IsEnabled:         true,
+				TimeoutSeconds:    30,
+				MaxTokens:         512,
+				CostInputPer1M:    1.25,
+				CostOutputPer1M:   5,
+				SaleInputPer1M:    2,
+				SaleOutputPer1M:   8,
+				ReserveMultiplier: 1,
+			},
+		},
+		clientKeys: []entity.ClientAPIKey{
+			{ID: 7, Name: "integration-client", PlainAPIKey: "wcs_live_proxy_test", Status: "active"},
+		},
+	}
+	routeStore := &stubStoreWithUpstream{
+		base:         store,
+		upstream:     upstream.URL,
+		providerType: "gemini",
+	}
+	engine := New(cfg, &platform.Dependencies{}, &Stores{
+		Admin:  routeStore,
+		Auth:   routeStore,
+		Log:    routeStore,
+		Public: routeStore,
+	})
+
+	body, err := json.Marshal(map[string]any{
+		"model": "gemini-2.5-pro",
+		"contents": []map[string]any{
+			{
+				"role": "user",
+				"parts": []map[string]any{
+					{"text": "hello"},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/gemini/generate-content", bytes.NewReader(body))
+	request.Header.Set("Authorization", "Bearer wcs_live_proxy_test")
+	request.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, recorder.Code, recorder.Body.String())
+	}
+	if !upstreamCalled {
+		t.Fatalf("expected upstream server to be called")
+	}
+	if len(store.createdLogs) != 1 {
+		t.Fatalf("expected 1 created log, got %d", len(store.createdLogs))
+	}
+	if store.createdLogs[0].RequestType != "gemini_generate_content" {
+		t.Fatalf("unexpected log request type: %+v", store.createdLogs[0])
+	}
+	if store.createdLogs[0].PromptTokens != 18 || store.createdLogs[0].CompletionTokens != 27 || store.createdLogs[0].TotalTokens != 45 {
+		t.Fatalf("unexpected usage logged: %+v", store.createdLogs[0])
+	}
+}
+
+func TestGeminiStreamGenerateContentProxyRoute(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1beta/models/gemini-2.5-flash-upstream:streamGenerateContent" {
+			t.Fatalf("unexpected upstream path: %s", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("alt"); got != "sse" {
+			t.Fatalf("unexpected alt query: %s", got)
+		}
+		if got := r.Header.Get("x-goog-api-key"); got != "sk-test-secret" {
+			t.Fatalf("unexpected x-goog-api-key header: %s", got)
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher, _ := w.(http.Flusher)
+		_, _ = w.Write([]byte("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Hello\"}]}}]}\n\n"))
+		if flusher != nil {
+			flusher.Flush()
+		}
+		_, _ = w.Write([]byte("data: {\"usageMetadata\":{\"promptTokenCount\":11,\"candidatesTokenCount\":13,\"totalTokenCount\":24}}\n\n"))
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}))
+	defer upstream.Close()
+
+	cfg := config.Config{AppName: "wcstransfer-gateway", Env: "test", GinMode: "test", HTTPPort: "8080"}
+	store := &stubStore{
+		models: []entity.Model{
+			{
+				ID:              1,
+				PublicName:      "gemini-2.5-flash",
+				ProviderID:      1,
+				ProviderName:    "gemini",
+				UpstreamModel:   "gemini-2.5-flash-upstream",
+				RouteStrategy:   "fixed",
+				IsEnabled:       true,
+				TimeoutSeconds:  30,
+				MaxTokens:       256,
+				CostInputPer1M:  0.3,
+				CostOutputPer1M: 0.6,
+				SaleInputPer1M:  0.6,
+				SaleOutputPer1M: 1.2,
+			},
+		},
+	}
+	routeStore := &stubStoreWithUpstream{
+		base:         store,
+		upstream:     upstream.URL,
+		providerType: "gemini",
+	}
+	engine := New(cfg, &platform.Dependencies{}, &Stores{
+		Admin:  routeStore,
+		Log:    routeStore,
+		Public: routeStore,
+	})
+
+	body, err := json.Marshal(map[string]any{
+		"model": "gemini-2.5-flash",
+		"contents": []map[string]any{
+			{
+				"role": "user",
+				"parts": []map[string]any{
+					{"text": "hello"},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/gemini/stream-generate-content", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
+	}
+	if !strings.Contains(recorder.Body.String(), "\"usageMetadata\"") {
+		t.Fatalf("expected gemini stream body, got %s", recorder.Body.String())
+	}
+	if len(store.createdLogs) != 1 {
+		t.Fatalf("expected 1 created log, got %d", len(store.createdLogs))
+	}
+	if store.createdLogs[0].PromptTokens != 11 || store.createdLogs[0].CompletionTokens != 13 || store.createdLogs[0].TotalTokens != 24 {
+		t.Fatalf("unexpected stream usage logged: %+v", store.createdLogs[0])
+	}
+}
+
 func TestChatCompletionsFailoverToNextKey(t *testing.T) {
 	requestCount := 0
 	authHeaders := make([]string, 0, 2)
