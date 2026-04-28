@@ -4,9 +4,13 @@ ALTER TABLE tenant_users
     ADD COLUMN IF NOT EXISTS min_available_balance NUMERIC(18, 8) NOT NULL DEFAULT 0;
 
 ALTER TABLE tenant_users
+    DROP CONSTRAINT IF EXISTS chk_tenant_users_wallet_non_negative;
+ALTER TABLE tenant_users
     ADD CONSTRAINT chk_tenant_users_wallet_non_negative
         CHECK (wallet_balance >= 0);
 
+ALTER TABLE tenant_users
+    DROP CONSTRAINT IF EXISTS chk_tenant_users_min_balance_non_negative;
 ALTER TABLE tenant_users
     ADD CONSTRAINT chk_tenant_users_min_balance_non_negative
         CHECK (min_available_balance >= 0);
