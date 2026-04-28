@@ -44,6 +44,10 @@ WHERE EXISTS (
     SELECT 1 FROM tenant_users tu WHERE tu.tenant_id = twl.user_id
 );
 
+-- 删除无法映射到任何用户的孤立账本记录
+DELETE FROM tenant_wallet_ledger
+WHERE user_id NOT IN (SELECT id FROM tenant_users);
+
 ALTER TABLE tenant_wallet_ledger DROP CONSTRAINT IF EXISTS tenant_wallet_ledger_user_id_fkey;
 ALTER TABLE tenant_wallet_ledger
     ADD CONSTRAINT tenant_wallet_ledger_user_id_fkey
