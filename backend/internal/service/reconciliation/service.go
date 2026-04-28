@@ -11,11 +11,11 @@ import (
 )
 
 type Store interface {
-	GetTenantBillingReconciliation(ctx context.Context) ([]entity.TenantBillingReconciliation, error)
+	GetUserBillingReconciliation(ctx context.Context) ([]entity.UserBillingReconciliation, error)
 }
 
 type Notifier interface {
-	SendReconciliationMismatch(ctx context.Context, item entity.TenantBillingReconciliation) error
+	SendReconciliationMismatch(ctx context.Context, item entity.UserBillingReconciliation) error
 }
 
 type Service struct {
@@ -66,7 +66,7 @@ func (s *Service) Start(ctx context.Context) {
 }
 
 func (s *Service) runOnce(ctx context.Context) {
-	items, err := s.store.GetTenantBillingReconciliation(ctx)
+	items, err := s.store.GetUserBillingReconciliation(ctx)
 	if err != nil {
 		log.Printf("reconciliation_check_failed: %v", err)
 		return
@@ -74,48 +74,41 @@ func (s *Service) runOnce(ctx context.Context) {
 
 	for _, item := range items {
 		if math.Abs(item.WalletVsLedgerDiff) < s.diffThreshold && math.Abs(item.LedgerVsLogsDiff) < s.diffThreshold {
-			s.clearAlerted(item.TenantID)
+			s.clearAlerted(item.UserID)
 			continue
 		}
 
-		if s.markAlerted(item.TenantID) {
+		if s.markAlerted(item.UserID) {
 			continue
 		}
 
 		log.Printf(
-			"reconciliation_mismatch tenant_id=%d tenant_name=%q wallet_balance=%.4f ledger_net=%.4f wallet_vs_ledger_diff=%.4f ledger_debit=%.4f log_billable=%.4f ledger_vs_logs_diff=%.4f",
-			item.TenantID,
-			item.TenantName,
-			item.WalletBalance,
-			item.LedgerNetAmount,
-			item.WalletVsLedgerDiff,
-			item.LedgerDebitAmount,
-			item.LogBillableAmount,
-			item.LedgerVsLogsDiff,
+			"reconciliation_mismatch user_id=%d user_email=%q wallet_balance=%.4f ledger_net=%.4f wallet_vs_ledger_diff=%.4f ledger_debit=%.4f log_billable=%.4f ledger_vs_logs_diff=%.4f",
+			item.UserID, item.UserEmail,
+			item.WalletBalance, item.LedgerNetAmount, item.WalletVsLedgerDiff,
+			item.LedgerDebitAmount, item.LogBillableAmount, item.LedgerVsLogsDiff,
 		)
 		if s.notifier != nil {
 			if err := s.notifier.SendReconciliationMismatch(ctx, item); err != nil {
-				log.Printf("reconciliation_alert_failed tenant_id=%d tenant_name=%q err=%v", item.TenantID, item.TenantName, err)
+				log.Printf("reconciliation_alert_failed user_id=%d user_email=%q err=%v", item.UserID, item.UserEmail, err)
 			}
 		}
 	}
 }
 
-func (s *Service) markAlerted(tenantID int64) bool {
+func (s *Service) markAlerted(userID int64) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.alerted[tenantID] {
+	if s.alerted[userID] {
 		return true
 	}
-
-	s.alerted[tenantID] = true
+	s.alerted[userID] = true
 	return false
 }
 
-func (s *Service) clearAlerted(tenantID int64) {
+func (s *Service) clearAlerted(userID int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	delete(s.alerted, tenantID)
+	delete(s.alerted, userID)
 }

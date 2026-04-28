@@ -71,7 +71,7 @@ export default function PortalKeysPage() {
   const { message, modal } = App.useApp();
   const [logFilterForm] = Form.useForm();
   const clearSession = usePortalAuthStore((state) => state.clearSession);
-  const tenant = usePortalAuthStore((state) => state.tenant);
+  const currentUser = usePortalAuthStore((state) => state.user);
   const setSession = usePortalAuthStore((state) => state.setSession);
   const [items, setItems] = useState([]);
   const [models, setModels] = useState([]);
@@ -99,7 +99,6 @@ export default function PortalKeysPage() {
       setSession({
         token: usePortalAuthStore.getState().token,
         user: me.user,
-        tenant: me.tenant || null,
       });
       setItems(keys.items || []);
       setModels(portalModels.items || []);
@@ -108,7 +107,7 @@ export default function PortalKeysPage() {
       if (error.response?.status === 401) {
         clearSession();
       }
-      message.error(error.response?.data?.error?.message || error.message || "加载租户工作台失败");
+      message.error(error.response?.data?.error?.message || error.message || "加载用户工作台失败");
     } finally {
       setLoading(false);
     }
@@ -246,7 +245,6 @@ export default function PortalKeysPage() {
     }
   };
 
-  const tenantActive = tenant?.status === "active";
   const modelOptions = useMemo(
     () => models.map((item) => ({ label: item.public_name, value: item.public_name })),
     [models],
@@ -347,30 +345,17 @@ export default function PortalKeysPage() {
     <Space direction="vertical" size={24} style={{ width: "100%", padding: 24 }}>
       <PageHeaderCard
         eyebrow="用户工作台"
-        title={`客户端密钥${tenant?.name ? ` - ${tenant.name}` : ""}`}
-        description="这里可以管理当前工作区的客户端密钥，并查看调用量、成本、可用模型和调用日志。"
+        title={`客户端密钥${currentUser?.email ? ` - ${currentUser.email}` : ""}`}
+        description="管理客户端密钥，查看调用量、成本、可用模型和调用日志。"
         actions={
           <Space>
             <Button onClick={handleLogout}>退出登录</Button>
-            <Button type="primary" onClick={handleCreate} disabled={!tenantActive}>
+            <Button type="primary" onClick={handleCreate}>
               创建客户端密钥
             </Button>
           </Space>
         }
       />
-
-      {!tenantActive ? (
-        <Alert
-          type={tenant?.status === "disabled" ? "error" : "warning"}
-          showIcon
-          message={tenant?.status === "disabled" ? "工作区已停用" : "工作区待激活"}
-          description={
-            tenant?.status === "disabled"
-              ? "当前工作区已被管理员停用，如需恢复请联系平台管理员。"
-              : "当前工作区已注册成功，但还需要管理员激活并设置客户端密钥上限。"
-          }
-        />
-      ) : null}
 
       <Row gutter={[16, 16]}>
         <Col xs={24} sm={12} lg={6}>
@@ -494,20 +479,14 @@ export default function PortalKeysPage() {
         </Space>
       </section>
 
-      {tenant ? (
-        <section className="panel-card">
-          <Typography.Title level={5} style={{ marginTop: 0 }}>工作区状态</Typography.Title>
-          <Space wrap>
-            <Tag color={tenantActive ? "green" : tenant?.status === "disabled" ? "red" : "gold"}>
-              {tenant?.status === "active" ? "已激活" : tenant?.status === "disabled" ? "已停用" : "待激活"}
-            </Tag>
-            <Tag color="blue">客户端密钥上限：{tenant.max_client_keys}</Tag>
-            <Tag>总密钥数：{formatNumber(stats?.client_key_count || 0)}</Tag>
-            <Tag color={(tenant.wallet_balance || 0) > 0 ? "green" : "red"}>钱包余额：{formatCurrency(tenant.wallet_balance || 0)}</Tag>
-          </Space>
-          {tenant.notes ? <Typography.Paragraph type="secondary" style={{ marginBottom: 0, marginTop: 12 }}>{tenant.notes}</Typography.Paragraph> : null}
-        </section>
-      ) : null}
+      <section className="panel-card">
+        <Typography.Title level={5} style={{ marginTop: 0 }}>账户状态</Typography.Title>
+        <Space wrap>
+          <Tag color={(stats?.wallet_balance || 0) > 0 ? "green" : "red"}>钱包余额：{formatCurrency(stats?.wallet_balance || 0)}</Tag>
+          <Tag>总密钥数：{formatNumber(stats?.client_key_count || 0)}</Tag>
+          <Tag color="blue">活跃密钥：{formatNumber(stats?.active_client_keys || 0)}</Tag>
+        </Space>
+      </section>
 
       <section className="panel-card">
         <Space direction="vertical" size={18} style={{ width: "100%" }}>

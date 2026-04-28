@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -19,9 +18,8 @@ import (
 
 type stubStore struct {
 	providers       []entity.Provider
-	tenants         []entity.Tenant
-	tenantUsers     []entity.TenantUser
-	walletLedger    []entity.TenantWalletLedgerEntry
+	users           []entity.User
+	walletLedger    []entity.WalletLedgerEntry
 	clientKeys      []entity.ClientAPIKey
 	providerKeys    []entity.ProviderKey
 	models          []entity.Model
@@ -29,7 +27,7 @@ type stubStore struct {
 	logDetails      map[int64]entity.RequestLogDetail
 	createdLogs     []entity.CreateRequestLogInput
 	adminActionLogs []entity.CreateAdminActionLogInput
-	reconciliation  []entity.TenantBillingReconciliation
+	reconciliation  []entity.UserBillingReconciliation
 	dashboard       entity.DashboardStats
 }
 
@@ -68,174 +66,6 @@ func (s *stubStore) UpdateProvider(_ context.Context, input entity.UpdateProvide
 	}
 
 	return entity.Provider{}, context.Canceled
-}
-
-func (s *stubStore) ListTenants(context.Context) ([]entity.Tenant, error) {
-	return s.tenants, nil
-}
-
-func (s *stubStore) CreateTenant(_ context.Context, input entity.CreateTenantInput) (entity.Tenant, error) {
-	item := entity.Tenant{
-		ID:                  int64(len(s.tenants) + 1),
-		Name:                input.Name,
-		Slug:                input.Slug,
-		Status:              input.Status,
-		MaxClientKeys:       input.MaxClientKeys,
-		MinAvailableBalance: input.MinAvailableBalance,
-		Notes:               input.Notes,
-	}
-	s.tenants = append([]entity.Tenant{item}, s.tenants...)
-	return item, nil
-}
-
-func (s *stubStore) UpdateTenant(_ context.Context, input entity.UpdateTenantInput) (entity.Tenant, error) {
-	for index, item := range s.tenants {
-		if item.ID == input.ID {
-			item.Name = input.Name
-			item.Slug = input.Slug
-			item.Status = input.Status
-			item.MaxClientKeys = input.MaxClientKeys
-			item.MinAvailableBalance = input.MinAvailableBalance
-			item.Notes = input.Notes
-			s.tenants[index] = item
-			return item, nil
-		}
-	}
-
-	return entity.Tenant{}, context.Canceled
-}
-
-func (s *stubStore) ListTenantUsers(_ context.Context, tenantID int64) ([]entity.TenantUser, error) {
-	items := make([]entity.TenantUser, 0)
-	for _, item := range s.tenantUsers {
-		if item.TenantID == tenantID {
-			items = append(items, item)
-		}
-	}
-	return items, nil
-}
-
-func (s *stubStore) CreateTenantUser(_ context.Context, input entity.CreateTenantUserInput) (entity.TenantUser, error) {
-	item := entity.TenantUser{
-		ID:       int64(len(s.tenantUsers) + 1),
-		TenantID: input.TenantID,
-		Email:    input.Email,
-		FullName: input.FullName,
-		Status:   input.Status,
-	}
-	for _, tenant := range s.tenants {
-		if tenant.ID == input.TenantID {
-			item.TenantName = tenant.Name
-			break
-		}
-	}
-	s.tenantUsers = append([]entity.TenantUser{item}, s.tenantUsers...)
-	return item, nil
-}
-
-func (s *stubStore) UpdateTenantUserStatus(_ context.Context, input entity.UpdateTenantUserStatusInput) (entity.TenantUser, error) {
-	for index, item := range s.tenantUsers {
-		if item.ID == input.UserID && item.TenantID == input.TenantID {
-			item.Status = input.Status
-			s.tenantUsers[index] = item
-			return item, nil
-		}
-	}
-	return entity.TenantUser{}, context.Canceled
-}
-
-func (s *stubStore) ResetTenantUserPassword(_ context.Context, input entity.ResetTenantUserPasswordInput) error {
-	for _, item := range s.tenantUsers {
-		if item.ID == input.UserID && item.TenantID == input.TenantID {
-			return nil
-		}
-	}
-	return context.Canceled
-}
-
-func (s *stubStore) AdjustTenantWallet(_ context.Context, input entity.TenantWalletAdjustmentInput) (entity.Tenant, error) {
-	for index, item := range s.tenants {
-		if item.ID == input.TenantID {
-			before := item.WalletBalance
-			item.WalletBalance += input.Amount
-			s.tenants[index] = item
-			s.walletLedger = append([]entity.TenantWalletLedgerEntry{{
-				ID:             int64(len(s.walletLedger) + 1),
-				TenantID:       item.ID,
-				Direction:      "credit",
-				Amount:         input.Amount,
-				BalanceBefore:  before,
-				BalanceAfter:   item.WalletBalance,
-				Note:           input.Note,
-				OperatorType:   "admin",
-				OperatorUserID: input.OperatorID,
-				CreatedAt:      time.Now(),
-			}}, s.walletLedger...)
-			return item, nil
-		}
-	}
-	return entity.Tenant{}, context.Canceled
-}
-
-func (s *stubStore) CorrectTenantWallet(_ context.Context, input entity.TenantWalletCorrectionInput) (entity.Tenant, error) {
-	for index, item := range s.tenants {
-		if item.ID == input.TenantID {
-			before := item.WalletBalance
-			amount := input.Amount
-			direction := "credit"
-			if amount < 0 {
-				direction = "debit"
-				if before+amount < 0 {
-					return entity.Tenant{}, context.Canceled
-				}
-			}
-			item.WalletBalance += amount
-			s.tenants[index] = item
-			s.walletLedger = append([]entity.TenantWalletLedgerEntry{{
-				ID:             int64(len(s.walletLedger) + 1),
-				TenantID:       item.ID,
-				Direction:      direction,
-				Amount:         math.Abs(amount),
-				BalanceBefore:  before,
-				BalanceAfter:   item.WalletBalance,
-				Note:           input.Note,
-				OperatorType:   "admin",
-				OperatorUserID: input.OperatorID,
-				CreatedAt:      time.Now(),
-			}}, s.walletLedger...)
-			return item, nil
-		}
-	}
-	return entity.Tenant{}, context.Canceled
-}
-
-func (s *stubStore) ListTenantWalletLedger(_ context.Context, tenantID int64, page int, pageSize int) (entity.TenantWalletLedgerPage, error) {
-	filtered := make([]entity.TenantWalletLedgerEntry, 0)
-	for _, item := range s.walletLedger {
-		if item.TenantID == tenantID {
-			filtered = append(filtered, item)
-		}
-	}
-	if page <= 0 {
-		page = 1
-	}
-	if pageSize <= 0 {
-		pageSize = 20
-	}
-	start := (page - 1) * pageSize
-	if start > len(filtered) {
-		start = len(filtered)
-	}
-	end := start + pageSize
-	if end > len(filtered) {
-		end = len(filtered)
-	}
-	return entity.TenantWalletLedgerPage{
-		Items:    filtered[start:end],
-		Total:    int64(len(filtered)),
-		Page:     page,
-		PageSize: pageSize,
-	}, nil
 }
 
 func (s *stubStore) ListClientAPIKeys(context.Context) ([]entity.ClientAPIKey, error) {
@@ -426,11 +256,11 @@ func (s *stubStore) AuthenticateClientAPIKey(_ context.Context, rawKey string) (
 			if len(item.AllowedModels) == 0 && len(item.AllowedModelIDs) > 0 {
 				item.AllowedModels = s.allowedModelNames(item.AllowedModelIDs)
 			}
-			if item.TenantID > 0 {
-				for _, tenant := range s.tenants {
-					if tenant.ID == item.TenantID {
-						item.TenantWalletBalance = tenant.WalletBalance
-						item.TenantMinAvailableBalance = tenant.MinAvailableBalance
+			if item.UserID > 0 {
+				for _, u := range s.users {
+					if u.ID == item.UserID {
+						item.UserWalletBalance = u.WalletBalance
+						item.UserMinAvailBalance = u.MinAvailableBalance
 						break
 					}
 				}
@@ -440,68 +270,6 @@ func (s *stubStore) AuthenticateClientAPIKey(_ context.Context, rawKey string) (
 	}
 
 	return entity.ClientAPIKey{}, context.Canceled
-}
-
-func (s *stubStore) RegisterTenantUser(_ context.Context, input entity.RegisterTenantUserInput) (entity.TenantUser, error) {
-	tenant := entity.Tenant{
-		ID:                  int64(len(s.tenants) + 1),
-		Name:                input.TenantName,
-		Slug:                input.TenantSlug,
-		Status:              "pending",
-		MaxClientKeys:       0,
-		MinAvailableBalance: 0.01,
-	}
-	s.tenants = append(s.tenants, tenant)
-	return entity.TenantUser{
-		ID:         int64(len(s.clientKeys) + len(s.tenants)),
-		TenantID:   tenant.ID,
-		TenantName: tenant.Name,
-		Email:      input.Email,
-		FullName:   input.FullName,
-		Status:     "active",
-	}, nil
-}
-
-func (s *stubStore) AuthenticateTenantUser(_ context.Context, email string, _ string) (entity.TenantUser, error) {
-	trimmed := strings.TrimSpace(email)
-	for _, tenant := range s.tenants {
-		return entity.TenantUser{
-			ID:         1,
-			TenantID:   tenant.ID,
-			TenantName: tenant.Name,
-			Email:      trimmed,
-			FullName:   "Stub User",
-			Status:     "active",
-		}, nil
-	}
-	return entity.TenantUser{}, context.Canceled
-}
-
-func (s *stubStore) UpdateTenantUserLastLogin(_ context.Context, _ int64) error {
-	return nil
-}
-
-func (s *stubStore) GetTenantUserByID(_ context.Context, userID int64) (entity.TenantUser, error) {
-	if len(s.tenants) == 0 {
-		return entity.TenantUser{}, context.Canceled
-	}
-	return entity.TenantUser{
-		ID:         userID,
-		TenantID:   s.tenants[0].ID,
-		TenantName: s.tenants[0].Name,
-		Email:      "stub@example.com",
-		FullName:   "Stub User",
-		Status:     "active",
-	}, nil
-}
-
-func (s *stubStore) GetTenantByID(_ context.Context, tenantID int64) (entity.Tenant, error) {
-	for _, item := range s.tenants {
-		if item.ID == tenantID {
-			return item, nil
-		}
-	}
-	return entity.Tenant{}, context.Canceled
 }
 
 func (s *stubStore) ListRequestLogs(_ context.Context, input entity.ListRequestLogsInput) (entity.RequestLogPage, error) {
@@ -584,67 +352,16 @@ func (s *stubStore) ExportRequestLogs(_ context.Context, input entity.ListReques
 	return page.Items, nil
 }
 
-func (s *stubStore) ExportTenantRequestLogs(_ context.Context, tenantID int64, input entity.ListRequestLogsInput) ([]entity.RequestLog, error) {
-	input.TenantID = tenantID
-	return s.ExportRequestLogs(context.Background(), input)
-}
-
 func (s *stubStore) CreateRequestLog(_ context.Context, input entity.CreateRequestLogInput) (int64, error) {
 	s.createdLogs = append(s.createdLogs, input)
 	return int64(len(s.createdLogs)), nil
-}
-
-func (s *stubStore) DeductTenantWalletUsage(_ context.Context, input entity.TenantWalletUsageDebitInput) error {
-	for index, item := range s.clientKeys {
-		if item.ID == input.ClientAPIKeyID {
-			before := item.TenantWalletBalance
-			item.TenantWalletBalance -= input.BillableAmount
-			if item.TenantWalletBalance < 0 {
-				item.TenantWalletBalance = 0
-			}
-			s.clientKeys[index] = item
-			if item.TenantID > 0 {
-				s.walletLedger = append([]entity.TenantWalletLedgerEntry{{
-					ID:              int64(len(s.walletLedger) + 1),
-					TenantID:        item.TenantID,
-					Direction:       "debit",
-					Amount:          input.BillableAmount,
-					BalanceBefore:   before,
-					BalanceAfter:    item.TenantWalletBalance,
-					Note:            input.Note,
-					OperatorType:    "system",
-					RequestLogID:    input.RequestLogID,
-					TraceID:         input.TraceID,
-					ModelPublicName: input.ModelPublicName,
-					TotalTokens:     int64(input.TotalTokens),
-					CostAmount:      input.CostAmount,
-					BillableAmount:  input.BillableAmount,
-					CreatedAt:       time.Now(),
-				}}, s.walletLedger...)
-			}
-			return nil
-		}
-	}
-	return nil
 }
 
 func (s *stubStore) GetDashboardStats(context.Context) (entity.DashboardStats, error) {
 	return s.dashboard, nil
 }
 
-func (s *stubStore) GetTenantBillingReconciliation(context.Context) ([]entity.TenantBillingReconciliation, error) {
-	return s.reconciliation, nil
-}
-
 func (s *stubStore) GetProviderRequestAnomalies(context.Context, time.Time, int, float64, float64) ([]entity.ProviderRequestAnomaly, error) {
-	return nil, nil
-}
-
-func (s *stubStore) GetTenantWalletBlockAnomalies(context.Context, time.Time, int, int) ([]entity.TenantWalletBlockAnomaly, error) {
-	return nil, nil
-}
-
-func (s *stubStore) GetTenantBillingDebitAnomalies(context.Context, time.Time, int, float64) ([]entity.TenantBillingDebitAnomaly, error) {
 	return nil, nil
 }
 
@@ -653,29 +370,156 @@ func (s *stubStore) CreateAdminActionLog(_ context.Context, input entity.CreateA
 	return nil
 }
 
-func (s *stubStore) ListTenantClientAPIKeys(_ context.Context, tenantID int64) ([]entity.ClientAPIKey, error) {
-	items := make([]entity.ClientAPIKey, 0)
-	for _, item := range s.clientKeys {
-		if item.TenantID == tenantID {
-			items = append(items, item)
+func (s *stubStore) ListUsers(context.Context) ([]entity.User, error) { return s.users, nil }
+
+func (s *stubStore) CreateUser(_ context.Context, input entity.CreateUserInput) (entity.User, error) {
+	item := entity.User{
+		ID:       int64(len(s.users) + 1),
+		Email:    input.Email,
+		FullName: input.FullName,
+		Status:   input.Status,
+	}
+	s.users = append([]entity.User{item}, s.users...)
+	return item, nil
+}
+
+func (s *stubStore) UpdateUserStatus(_ context.Context, input entity.UpdateUserStatusInput) (entity.User, error) {
+	for i := range s.users {
+		if s.users[i].ID == input.UserID {
+			s.users[i].Status = input.Status
+			return s.users[i], nil
+		}
+	}
+	return entity.User{}, context.Canceled
+}
+
+func (s *stubStore) ResetUserPassword(_ context.Context, _ entity.ResetUserPasswordInput) error {
+	return nil
+}
+
+func (s *stubStore) AdjustUserWallet(_ context.Context, input entity.UserWalletAdjustmentInput) (entity.User, error) {
+	for i := range s.users {
+		if s.users[i].ID == input.UserID {
+			before := s.users[i].WalletBalance
+			s.users[i].WalletBalance += input.Amount
+			s.walletLedger = append(s.walletLedger, entity.WalletLedgerEntry{
+				UserID: input.UserID, Direction: "credit", Amount: input.Amount,
+				BalanceBefore: before, BalanceAfter: s.users[i].WalletBalance,
+				Note: input.Note, OperatorType: "admin", OperatorUserID: input.OperatorID,
+			})
+			return s.users[i], nil
+		}
+	}
+	return entity.User{}, context.Canceled
+}
+
+func (s *stubStore) CorrectUserWallet(_ context.Context, input entity.UserWalletCorrectionInput) (entity.User, error) {
+	for i := range s.users {
+		if s.users[i].ID == input.UserID {
+			before := s.users[i].WalletBalance
+			dir := "credit"
+			if input.Amount < 0 {
+				dir = "debit"
+				s.users[i].WalletBalance += input.Amount
+			} else {
+				s.users[i].WalletBalance += input.Amount
+			}
+			abs := input.Amount
+			if abs < 0 {
+				abs = -abs
+			}
+			s.walletLedger = append(s.walletLedger, entity.WalletLedgerEntry{
+				UserID: input.UserID, Direction: dir, Amount: abs,
+				BalanceBefore: before, BalanceAfter: s.users[i].WalletBalance,
+				Note: input.Note, OperatorType: "admin", OperatorUserID: input.OperatorID,
+			})
+			return s.users[i], nil
+		}
+	}
+	return entity.User{}, context.Canceled
+}
+
+func (s *stubStore) ListUserWalletLedger(_ context.Context, userID int64, page int, pageSize int) (entity.WalletLedgerPage, error) {
+	var items []entity.WalletLedgerEntry
+	for _, e := range s.walletLedger {
+		if e.UserID == userID {
+			items = append(items, e)
+		}
+	}
+	return entity.WalletLedgerPage{Items: items, Total: int64(len(items)), Page: page, PageSize: pageSize}, nil
+}
+
+func (s *stubStore) ExportUserRequestLogs(_ context.Context, _ int64, _ entity.ListRequestLogsInput) ([]entity.RequestLog, error) {
+	return s.requestLogs, nil
+}
+
+func (s *stubStore) GetUserBillingReconciliation(context.Context) ([]entity.UserBillingReconciliation, error) {
+	return s.reconciliation, nil
+}
+
+func (s *stubStore) DeductUserWalletUsage(_ context.Context, _ entity.UserWalletUsageDebitInput) error {
+	return nil
+}
+
+func (s *stubStore) AuthenticateUser(_ context.Context, email string, _ string) (entity.User, error) {
+	for _, u := range s.users {
+		if u.Email == email {
+			return u, nil
+		}
+	}
+	return entity.User{}, context.Canceled
+}
+
+func (s *stubStore) UpdateUserLastLogin(_ context.Context, _ int64) error { return nil }
+
+func (s *stubStore) GetUserByID(_ context.Context, userID int64) (entity.User, error) {
+	for _, u := range s.users {
+		if u.ID == userID {
+			return u, nil
+		}
+	}
+	return entity.User{}, context.Canceled
+}
+
+func (s *stubStore) ListUserClientAPIKeys(_ context.Context, userID int64) ([]entity.ClientAPIKey, error) {
+	var items []entity.ClientAPIKey
+	for _, k := range s.clientKeys {
+		if k.UserID == userID {
+			items = append(items, k)
 		}
 	}
 	return items, nil
 }
 
-func (s *stubStore) CreateTenantClientAPIKey(_ context.Context, input entity.CreateClientAPIKeyInput) (entity.ClientAPIKey, error) {
-	return s.CreateClientAPIKey(context.Background(), input)
+func (s *stubStore) CreateUserClientAPIKey(_ context.Context, input entity.CreateClientAPIKeyInput) (entity.ClientAPIKey, error) {
+	item := entity.ClientAPIKey{ID: int64(len(s.clientKeys) + 1), UserID: input.UserID, Name: input.Name, Status: input.Status, MaskedKey: "wcs_live_xxx...xxxx"}
+	s.clientKeys = append([]entity.ClientAPIKey{item}, s.clientKeys...)
+	return item, nil
 }
 
-func (s *stubStore) DisableTenantClientAPIKey(_ context.Context, tenantID int64, id int64) (entity.ClientAPIKey, error) {
-	for index, item := range s.clientKeys {
-		if item.ID == id && item.TenantID == tenantID {
-			item.Status = "disabled"
-			s.clientKeys[index] = item
-			return item, nil
+func (s *stubStore) DisableUserClientAPIKey(_ context.Context, _ int64, id int64) (entity.ClientAPIKey, error) {
+	for i := range s.clientKeys {
+		if s.clientKeys[i].ID == id {
+			s.clientKeys[i].Status = "disabled"
+			return s.clientKeys[i], nil
 		}
 	}
 	return entity.ClientAPIKey{}, context.Canceled
+}
+
+func (s *stubStore) GetUserPortalStats(_ context.Context, _ int64) (entity.UserPortalStats, error) {
+	return entity.UserPortalStats{}, nil
+}
+
+func (s *stubStore) ListUserRequestLogs(_ context.Context, userID int64, input entity.ListRequestLogsInput) (entity.RequestLogPage, error) {
+	return entity.RequestLogPage{Items: s.requestLogs, Total: int64(len(s.requestLogs)), Page: 1, PageSize: 20}, nil
+}
+
+func (s *stubStore) GetUserRequestLog(_ context.Context, _ int64, id int64) (entity.RequestLogDetail, error) {
+	if detail, ok := s.logDetails[id]; ok {
+		return detail, nil
+	}
+	return entity.RequestLogDetail{}, context.Canceled
 }
 
 func TestPublicRoutes(t *testing.T) {
@@ -839,10 +683,10 @@ func TestAdminTenantBillingReconciliationRoute(t *testing.T) {
 	}
 
 	store := &stubStore{
-		reconciliation: []entity.TenantBillingReconciliation{
+		reconciliation: []entity.UserBillingReconciliation{
 			{
-				TenantID:           1,
-				TenantName:         "tenant-a",
+				UserID:             1,
+				UserEmail:          "user-a@test.com",
 				WalletBalance:      10,
 				LedgerCreditAmount: 12,
 				LedgerDebitAmount:  2,
@@ -863,14 +707,14 @@ func TestAdminTenantBillingReconciliationRoute(t *testing.T) {
 	}
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/admin/reconciliation/tenants", nil)
+	request := httptest.NewRequest(http.MethodGet, "/admin/reconciliation/users", nil)
 	request.Header.Set("Authorization", "Bearer "+token)
 	engine.ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, recorder.Code, recorder.Body.String())
 	}
-	if !strings.Contains(recorder.Body.String(), "\"tenant_name\":\"tenant-a\"") {
+	if !strings.Contains(recorder.Body.String(), "\"user_email\":\"user-a@test.com\"") {
 		t.Fatalf("expected reconciliation payload, got %s", recorder.Body.String())
 	}
 }
@@ -885,8 +729,8 @@ func TestAdminWalletAdjustRecordsOperatorAndAuditLog(t *testing.T) {
 	}
 
 	store := &stubStore{
-		tenants: []entity.Tenant{
-			{ID: 1, Name: "Tenant A", Slug: "tenant-a", Status: "active", WalletBalance: 5},
+		users: []entity.User{
+			{ID: 1, Email: "user-a@test.com", FullName: "User A", Status: "active", WalletBalance: 5},
 		},
 	}
 	engine := New(cfg, &platform.Dependencies{}, &Stores{Admin: store, Public: store})
@@ -899,7 +743,7 @@ func TestAdminWalletAdjustRecordsOperatorAndAuditLog(t *testing.T) {
 
 	body := bytes.NewBufferString(`{"amount":10,"note":"manual top-up"}`)
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/admin/tenants/1/wallet/adjust", body)
+	request := httptest.NewRequest(http.MethodPost, "/admin/users/1/wallet/adjust", body)
 	request.Header.Set("Authorization", "Bearer "+token)
 	request.Header.Set("Content-Type", "application/json")
 	engine.ServeHTTP(recorder, request)
@@ -916,13 +760,13 @@ func TestAdminWalletAdjustRecordsOperatorAndAuditLog(t *testing.T) {
 	if len(store.adminActionLogs) != 1 {
 		t.Fatalf("expected 1 admin action log, got %d", len(store.adminActionLogs))
 	}
-	if store.adminActionLogs[0].Action != "tenant.wallet.credit" {
+	if store.adminActionLogs[0].Action != "user.wallet.credit" {
 		t.Fatalf("unexpected admin audit action: %+v", store.adminActionLogs[0])
 	}
 	if store.adminActionLogs[0].AdminUserID != 42 || store.adminActionLogs[0].AdminUsername != "ops-admin" {
 		t.Fatalf("unexpected admin audit actor: %+v", store.adminActionLogs[0])
 	}
-	if store.adminActionLogs[0].RequestPath != "/admin/tenants/:id/wallet/adjust" {
+	if store.adminActionLogs[0].RequestPath != "/admin/users/:id/wallet/adjust" {
 		t.Fatalf("unexpected admin audit request path: %+v", store.adminActionLogs[0])
 	}
 }
@@ -937,8 +781,8 @@ func TestAdminWalletCorrectionRecordsOperatorAndAuditLog(t *testing.T) {
 	}
 
 	store := &stubStore{
-		tenants: []entity.Tenant{
-			{ID: 1, Name: "Tenant A", Slug: "tenant-a", Status: "active", WalletBalance: 5},
+		users: []entity.User{
+			{ID: 1, Email: "user-a@test.com", FullName: "User A", Status: "active", WalletBalance: 5},
 		},
 	}
 	engine := New(cfg, &platform.Dependencies{}, &Stores{Admin: store, Public: store})
@@ -951,7 +795,7 @@ func TestAdminWalletCorrectionRecordsOperatorAndAuditLog(t *testing.T) {
 
 	body := bytes.NewBufferString(`{"amount":-1.25,"note":"manual reconciliation fix"}`)
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/admin/tenants/1/wallet/correct", body)
+	request := httptest.NewRequest(http.MethodPost, "/admin/users/1/wallet/correct", body)
 	request.Header.Set("Authorization", "Bearer "+token)
 	request.Header.Set("Content-Type", "application/json")
 	engine.ServeHTTP(recorder, request)
@@ -971,10 +815,10 @@ func TestAdminWalletCorrectionRecordsOperatorAndAuditLog(t *testing.T) {
 	if len(store.adminActionLogs) != 1 {
 		t.Fatalf("expected 1 admin action log, got %d", len(store.adminActionLogs))
 	}
-	if store.adminActionLogs[0].Action != "tenant.wallet.reconcile" {
+	if store.adminActionLogs[0].Action != "user.wallet.correct" {
 		t.Fatalf("unexpected admin audit action: %+v", store.adminActionLogs[0])
 	}
-	if store.adminActionLogs[0].RequestPath != "/admin/tenants/:id/wallet/correct" {
+	if store.adminActionLogs[0].RequestPath != "/admin/users/:id/wallet/correct" {
 		t.Fatalf("unexpected admin audit request path: %+v", store.adminActionLogs[0])
 	}
 }
@@ -1563,11 +1407,11 @@ func TestChatCompletionsRejectsInsufficientWalletReserve(t *testing.T) {
 	}
 
 	store := &stubStore{
-		tenants: []entity.Tenant{
-			{ID: 1, Name: "tenant-a", Slug: "tenant-a", Status: "active", MaxClientKeys: 1, WalletBalance: 0.05, MinAvailableBalance: 0.01},
+		users: []entity.User{
+			{ID: 1, Email: "user-a@test.com", FullName: "User A", Status: "active", WalletBalance: 0.05, MinAvailableBalance: 0.01},
 		},
 		clientKeys: []entity.ClientAPIKey{
-			{ID: 7, TenantID: 1, Name: "tenant-client", PlainAPIKey: "wcs_live_low_balance", Status: "active"},
+			{ID: 7, UserID: 1, Name: "user-client", PlainAPIKey: "wcs_live_low_balance", Status: "active"},
 		},
 		models: []entity.Model{
 			{
@@ -1913,46 +1757,6 @@ func (s *stubStoreWithUpstream) UpdateProvider(ctx context.Context, input entity
 	return s.base.UpdateProvider(ctx, input)
 }
 
-func (s *stubStoreWithUpstream) ListTenants(ctx context.Context) ([]entity.Tenant, error) {
-	return s.base.ListTenants(ctx)
-}
-
-func (s *stubStoreWithUpstream) CreateTenant(ctx context.Context, input entity.CreateTenantInput) (entity.Tenant, error) {
-	return s.base.CreateTenant(ctx, input)
-}
-
-func (s *stubStoreWithUpstream) UpdateTenant(ctx context.Context, input entity.UpdateTenantInput) (entity.Tenant, error) {
-	return s.base.UpdateTenant(ctx, input)
-}
-
-func (s *stubStoreWithUpstream) ListTenantUsers(ctx context.Context, tenantID int64) ([]entity.TenantUser, error) {
-	return s.base.ListTenantUsers(ctx, tenantID)
-}
-
-func (s *stubStoreWithUpstream) CreateTenantUser(ctx context.Context, input entity.CreateTenantUserInput) (entity.TenantUser, error) {
-	return s.base.CreateTenantUser(ctx, input)
-}
-
-func (s *stubStoreWithUpstream) UpdateTenantUserStatus(ctx context.Context, input entity.UpdateTenantUserStatusInput) (entity.TenantUser, error) {
-	return s.base.UpdateTenantUserStatus(ctx, input)
-}
-
-func (s *stubStoreWithUpstream) ResetTenantUserPassword(ctx context.Context, input entity.ResetTenantUserPasswordInput) error {
-	return s.base.ResetTenantUserPassword(ctx, input)
-}
-
-func (s *stubStoreWithUpstream) AdjustTenantWallet(ctx context.Context, input entity.TenantWalletAdjustmentInput) (entity.Tenant, error) {
-	return s.base.AdjustTenantWallet(ctx, input)
-}
-
-func (s *stubStoreWithUpstream) CorrectTenantWallet(ctx context.Context, input entity.TenantWalletCorrectionInput) (entity.Tenant, error) {
-	return s.base.CorrectTenantWallet(ctx, input)
-}
-
-func (s *stubStoreWithUpstream) ListTenantWalletLedger(ctx context.Context, tenantID int64, page int, pageSize int) (entity.TenantWalletLedgerPage, error) {
-	return s.base.ListTenantWalletLedger(ctx, tenantID, page, pageSize)
-}
-
 func (s *stubStoreWithUpstream) ListClientAPIKeys(ctx context.Context) ([]entity.ClientAPIKey, error) {
 	return s.base.ListClientAPIKeys(ctx)
 }
@@ -2033,26 +1837,6 @@ func (s *stubStoreWithUpstream) AuthenticateClientAPIKey(ctx context.Context, ra
 	return s.base.AuthenticateClientAPIKey(ctx, rawKey)
 }
 
-func (s *stubStoreWithUpstream) RegisterTenantUser(ctx context.Context, input entity.RegisterTenantUserInput) (entity.TenantUser, error) {
-	return s.base.RegisterTenantUser(ctx, input)
-}
-
-func (s *stubStoreWithUpstream) AuthenticateTenantUser(ctx context.Context, email string, password string) (entity.TenantUser, error) {
-	return s.base.AuthenticateTenantUser(ctx, email, password)
-}
-
-func (s *stubStoreWithUpstream) UpdateTenantUserLastLogin(ctx context.Context, userID int64) error {
-	return s.base.UpdateTenantUserLastLogin(ctx, userID)
-}
-
-func (s *stubStoreWithUpstream) GetTenantUserByID(ctx context.Context, userID int64) (entity.TenantUser, error) {
-	return s.base.GetTenantUserByID(ctx, userID)
-}
-
-func (s *stubStoreWithUpstream) GetTenantByID(ctx context.Context, tenantID int64) (entity.Tenant, error) {
-	return s.base.GetTenantByID(ctx, tenantID)
-}
-
 func (s *stubStoreWithUpstream) ListRequestLogs(ctx context.Context, input entity.ListRequestLogsInput) (entity.RequestLogPage, error) {
 	return s.base.ListRequestLogs(ctx, input)
 }
@@ -2065,52 +1849,78 @@ func (s *stubStoreWithUpstream) ExportRequestLogs(ctx context.Context, input ent
 	return s.base.ExportRequestLogs(ctx, input)
 }
 
-func (s *stubStoreWithUpstream) ExportTenantRequestLogs(ctx context.Context, tenantID int64, input entity.ListRequestLogsInput) ([]entity.RequestLog, error) {
-	return s.base.ExportTenantRequestLogs(ctx, tenantID, input)
-}
-
 func (s *stubStoreWithUpstream) CreateRequestLog(ctx context.Context, input entity.CreateRequestLogInput) (int64, error) {
 	return s.base.CreateRequestLog(ctx, input)
-}
-
-func (s *stubStoreWithUpstream) DeductTenantWalletUsage(ctx context.Context, input entity.TenantWalletUsageDebitInput) error {
-	return s.base.DeductTenantWalletUsage(ctx, input)
 }
 
 func (s *stubStoreWithUpstream) GetDashboardStats(ctx context.Context) (entity.DashboardStats, error) {
 	return s.base.GetDashboardStats(ctx)
 }
 
-func (s *stubStoreWithUpstream) GetTenantBillingReconciliation(ctx context.Context) ([]entity.TenantBillingReconciliation, error) {
-	return s.base.GetTenantBillingReconciliation(ctx)
-}
-
 func (s *stubStoreWithUpstream) GetProviderRequestAnomalies(ctx context.Context, since time.Time, minRequests int, rateLimitedThreshold float64, serverErrorThreshold float64) ([]entity.ProviderRequestAnomaly, error) {
 	return s.base.GetProviderRequestAnomalies(ctx, since, minRequests, rateLimitedThreshold, serverErrorThreshold)
-}
-
-func (s *stubStoreWithUpstream) GetTenantWalletBlockAnomalies(ctx context.Context, since time.Time, walletBlockThreshold int, reserveBlockThreshold int) ([]entity.TenantWalletBlockAnomaly, error) {
-	return s.base.GetTenantWalletBlockAnomalies(ctx, since, walletBlockThreshold, reserveBlockThreshold)
-}
-
-func (s *stubStoreWithUpstream) GetTenantBillingDebitAnomalies(ctx context.Context, since time.Time, minCount int, minBillableAmount float64) ([]entity.TenantBillingDebitAnomaly, error) {
-	return s.base.GetTenantBillingDebitAnomalies(ctx, since, minCount, minBillableAmount)
 }
 
 func (s *stubStoreWithUpstream) CreateAdminActionLog(ctx context.Context, input entity.CreateAdminActionLogInput) error {
 	return s.base.CreateAdminActionLog(ctx, input)
 }
 
-func (s *stubStoreWithUpstream) ListTenantClientAPIKeys(ctx context.Context, tenantID int64) ([]entity.ClientAPIKey, error) {
-	return s.base.ListTenantClientAPIKeys(ctx, tenantID)
+func (s *stubStoreWithUpstream) ListUsers(ctx context.Context) ([]entity.User, error) {
+	return s.base.ListUsers(ctx)
 }
-
-func (s *stubStoreWithUpstream) CreateTenantClientAPIKey(ctx context.Context, input entity.CreateClientAPIKeyInput) (entity.ClientAPIKey, error) {
-	return s.base.CreateTenantClientAPIKey(ctx, input)
+func (s *stubStoreWithUpstream) CreateUser(ctx context.Context, input entity.CreateUserInput) (entity.User, error) {
+	return s.base.CreateUser(ctx, input)
 }
-
-func (s *stubStoreWithUpstream) DisableTenantClientAPIKey(ctx context.Context, tenantID int64, id int64) (entity.ClientAPIKey, error) {
-	return s.base.DisableTenantClientAPIKey(ctx, tenantID, id)
+func (s *stubStoreWithUpstream) UpdateUserStatus(ctx context.Context, input entity.UpdateUserStatusInput) (entity.User, error) {
+	return s.base.UpdateUserStatus(ctx, input)
+}
+func (s *stubStoreWithUpstream) ResetUserPassword(ctx context.Context, input entity.ResetUserPasswordInput) error {
+	return s.base.ResetUserPassword(ctx, input)
+}
+func (s *stubStoreWithUpstream) AdjustUserWallet(ctx context.Context, input entity.UserWalletAdjustmentInput) (entity.User, error) {
+	return s.base.AdjustUserWallet(ctx, input)
+}
+func (s *stubStoreWithUpstream) CorrectUserWallet(ctx context.Context, input entity.UserWalletCorrectionInput) (entity.User, error) {
+	return s.base.CorrectUserWallet(ctx, input)
+}
+func (s *stubStoreWithUpstream) ListUserWalletLedger(ctx context.Context, userID int64, page int, pageSize int) (entity.WalletLedgerPage, error) {
+	return s.base.ListUserWalletLedger(ctx, userID, page, pageSize)
+}
+func (s *stubStoreWithUpstream) ExportUserRequestLogs(ctx context.Context, userID int64, input entity.ListRequestLogsInput) ([]entity.RequestLog, error) {
+	return s.base.ExportUserRequestLogs(ctx, userID, input)
+}
+func (s *stubStoreWithUpstream) GetUserBillingReconciliation(ctx context.Context) ([]entity.UserBillingReconciliation, error) {
+	return s.base.GetUserBillingReconciliation(ctx)
+}
+func (s *stubStoreWithUpstream) DeductUserWalletUsage(ctx context.Context, input entity.UserWalletUsageDebitInput) error {
+	return s.base.DeductUserWalletUsage(ctx, input)
+}
+func (s *stubStoreWithUpstream) AuthenticateUser(ctx context.Context, email string, password string) (entity.User, error) {
+	return s.base.AuthenticateUser(ctx, email, password)
+}
+func (s *stubStoreWithUpstream) UpdateUserLastLogin(ctx context.Context, userID int64) error {
+	return s.base.UpdateUserLastLogin(ctx, userID)
+}
+func (s *stubStoreWithUpstream) GetUserByID(ctx context.Context, userID int64) (entity.User, error) {
+	return s.base.GetUserByID(ctx, userID)
+}
+func (s *stubStoreWithUpstream) ListUserClientAPIKeys(ctx context.Context, userID int64) ([]entity.ClientAPIKey, error) {
+	return s.base.ListUserClientAPIKeys(ctx, userID)
+}
+func (s *stubStoreWithUpstream) CreateUserClientAPIKey(ctx context.Context, input entity.CreateClientAPIKeyInput) (entity.ClientAPIKey, error) {
+	return s.base.CreateUserClientAPIKey(ctx, input)
+}
+func (s *stubStoreWithUpstream) DisableUserClientAPIKey(ctx context.Context, userID int64, id int64) (entity.ClientAPIKey, error) {
+	return s.base.DisableUserClientAPIKey(ctx, userID, id)
+}
+func (s *stubStoreWithUpstream) GetUserPortalStats(ctx context.Context, userID int64) (entity.UserPortalStats, error) {
+	return s.base.GetUserPortalStats(ctx, userID)
+}
+func (s *stubStoreWithUpstream) ListUserRequestLogs(ctx context.Context, userID int64, input entity.ListRequestLogsInput) (entity.RequestLogPage, error) {
+	return s.base.ListUserRequestLogs(ctx, userID, input)
+}
+func (s *stubStoreWithUpstream) GetUserRequestLog(ctx context.Context, userID int64, id int64) (entity.RequestLogDetail, error) {
+	return s.base.GetUserRequestLog(ctx, userID, id)
 }
 
 func defaultTestProviderType(value string) string {

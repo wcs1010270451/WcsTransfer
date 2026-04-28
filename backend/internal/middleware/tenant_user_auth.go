@@ -6,16 +6,16 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"wcstransfer/backend/internal/service/tenantauth"
+	"wcstransfer/backend/internal/service/userauth"
 )
 
-const tenantUserClaimsContextKey = "tenant_user_claims"
+const userClaimsContextKey = "user_claims"
 
-func TenantUserAuth(auth *tenantauth.Service) gin.HandlerFunc {
+func TenantUserAuth(auth *userauth.Service) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if auth == nil {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-				"error": gin.H{"message": "tenant auth is not configured", "type": "auth_error"},
+				"error": gin.H{"message": "user auth is not configured", "type": "auth_error"},
 			})
 			return
 		}
@@ -36,17 +36,17 @@ func TenantUserAuth(auth *tenantauth.Service) gin.HandlerFunc {
 			return
 		}
 
-		c.Set(tenantUserClaimsContextKey, claims)
+		c.Set(userClaimsContextKey, claims)
 		c.Next()
 	}
 }
 
-func TenantUserClaimsFromContext(c *gin.Context) (tenantauth.Claims, bool) {
-	value, ok := c.Get(tenantUserClaimsContextKey)
+func UserClaimsFromContext(c *gin.Context) (userauth.Claims, bool) {
+	value, ok := c.Get(userClaimsContextKey)
 	if !ok {
-		return tenantauth.Claims{}, false
+		return userauth.Claims{}, false
 	}
 
-	claims, ok := value.(tenantauth.Claims)
+	claims, ok := value.(userauth.Claims)
 	return claims, ok
 }

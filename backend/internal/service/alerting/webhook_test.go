@@ -11,10 +11,10 @@ import (
 	"wcstransfer/backend/internal/entity"
 )
 
-func sampleItem() entity.TenantBillingReconciliation {
-	return entity.TenantBillingReconciliation{
-		TenantID:           7,
-		TenantName:         "tenant-a",
+func sampleItem() entity.UserBillingReconciliation {
+	return entity.UserBillingReconciliation{
+		UserID:           7,
+		UserEmail:         "user-a@test.com",
 		WalletBalance:      10.5,
 		LedgerCreditAmount: 20,
 		LedgerDebitAmount:  9.5,
@@ -114,9 +114,9 @@ func TestWebhookNotifierWecomWalletBlockPayload(t *testing.T) {
 	defer server.Close()
 
 	notifier := NewWebhookNotifier(server.URL, "wecom", time.Second)
-	err := notifier.SendTenantWalletBlockAnomaly(context.Background(), entity.TenantWalletBlockAnomaly{
-		TenantID:                  1,
-		TenantName:                "king",
+	err := notifier.SendUserWalletBlockAnomaly(context.Background(), entity.UserWalletBlockAnomaly{
+		UserID:                  1,
+		UserEmail:                "king",
 		WalletBlockedCount:        7,
 		ReserveBlockedCount:       2,
 		IsWalletBlockedAnomalous:  true,
@@ -142,9 +142,9 @@ func TestWebhookNotifierFeishuBillingDebitPayload(t *testing.T) {
 	defer server.Close()
 
 	notifier := NewWebhookNotifier(server.URL, "feishu", time.Second)
-	err := notifier.SendTenantBillingDebitAnomaly(context.Background(), entity.TenantBillingDebitAnomaly{
-		TenantID:                  1,
-		TenantName:                "king",
+	err := notifier.SendUserBillingDebitAnomaly(context.Background(), entity.UserBillingDebitAnomaly{
+		UserID:                  1,
+		UserEmail:                "king",
 		MissingDebitCount:         2,
 		MissingBillableAmount:     1.23,
 		MissingCostAmount:         0.67,

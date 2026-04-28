@@ -10,11 +10,11 @@ import (
 )
 
 type Store interface {
-	GetTenantBillingDebitAnomalies(ctx context.Context, since time.Time, minCount int, minBillableAmount float64) ([]entity.TenantBillingDebitAnomaly, error)
+	GetUserBillingDebitAnomalies(ctx context.Context, since time.Time, minCount int, minBillableAmount float64) ([]entity.UserBillingDebitAnomaly, error)
 }
 
 type Notifier interface {
-	SendTenantBillingDebitAnomaly(ctx context.Context, item entity.TenantBillingDebitAnomaly, window time.Duration) error
+	SendUserBillingDebitAnomaly(ctx context.Context, item entity.UserBillingDebitAnomaly, window time.Duration) error
 }
 
 type Service struct {
@@ -76,7 +76,7 @@ func (s *Service) Start(ctx context.Context) {
 }
 
 func (s *Service) runOnce(ctx context.Context) {
-	items, err := s.store.GetTenantBillingDebitAnomalies(ctx, time.Now().UTC().Add(-s.window), s.minCount, s.minBillableAmount)
+	items, err := s.store.GetUserBillingDebitAnomalies(ctx, time.Now().UTC().Add(-s.window), s.minCount, s.minBillableAmount)
 	if err != nil {
 		log.Printf("billing_anomaly_check_failed: %v", err)
 		return
@@ -84,23 +84,19 @@ func (s *Service) runOnce(ctx context.Context) {
 
 	active := make(map[int64]struct{}, len(items))
 	for _, item := range items {
-		active[item.TenantID] = struct{}{}
-		if s.markAlerted(item.TenantID) {
+		active[item.UserID] = struct{}{}
+		if s.markAlerted(item.UserID) {
 			continue
 		}
 
 		log.Printf(
-			"tenant_billing_debit_anomaly tenant_id=%d tenant_name=%q missing_debit_count=%d missing_billable_amount=%.4f missing_cost_amount=%.4f window=%s",
-			item.TenantID,
-			item.TenantName,
-			item.MissingDebitCount,
-			item.MissingBillableAmount,
-			item.MissingCostAmount,
-			s.window,
+			"user_billing_debit_anomaly user_id=%d user_email=%q missing_debit_count=%d missing_billable_amount=%.4f missing_cost_amount=%.4f window=%s",
+			item.UserID, item.UserEmail,
+			item.MissingDebitCount, item.MissingBillableAmount, item.MissingCostAmount, s.window,
 		)
 		if s.notifier != nil {
-			if err := s.notifier.SendTenantBillingDebitAnomaly(ctx, item, s.window); err != nil {
-				log.Printf("tenant_billing_debit_alert_failed tenant_id=%d tenant_name=%q err=%v", item.TenantID, item.TenantName, err)
+			if err := s.notifier.SendUserBillingDebitAnomaly(ctx, item, s.window); err != nil {
+				log.Printf("user_billing_debit_alert_failed user_id=%d user_email=%q err=%v", item.UserID, item.UserEmail, err)
 			}
 		}
 	}
@@ -108,14 +104,14 @@ func (s *Service) runOnce(ctx context.Context) {
 	s.clearRecovered(active)
 }
 
-func (s *Service) markAlerted(tenantID int64) bool {
+func (s *Service) markAlerted(userID int64) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.alerted[tenantID] {
+	if s.alerted[userID] {
 		return true
 	}
-	s.alerted[tenantID] = true
+	s.alerted[userID] = true
 	return false
 }
 
@@ -123,9 +119,9 @@ func (s *Service) clearRecovered(active map[int64]struct{}) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	for tenantID := range s.alerted {
-		if _, ok := active[tenantID]; !ok {
-			delete(s.alerted, tenantID)
+	for userID := range s.alerted {
+		if _, ok := active[userID]; !ok {
+			delete(s.alerted, userID)
 		}
 	}
 }

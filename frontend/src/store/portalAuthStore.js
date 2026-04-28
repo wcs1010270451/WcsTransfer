@@ -28,9 +28,7 @@ const loadToken = () => {
 
 const migrateJSON = (key) => {
   const sessionValue = window.sessionStorage.getItem(key);
-  if (sessionValue) {
-    return;
-  }
+  if (sessionValue) return;
   const legacyValue = window.localStorage.getItem(key);
   if (legacyValue) {
     window.sessionStorage.setItem(key, legacyValue);
@@ -39,29 +37,25 @@ const migrateJSON = (key) => {
 };
 
 migrateJSON("wcstransfer_portal_user");
-migrateJSON("wcstransfer_portal_tenant");
 
 const usePortalAuthStore = create((set) => ({
   token: loadToken(),
   user: loadJSON("wcstransfer_portal_user", null),
-  tenant: loadJSON("wcstransfer_portal_tenant", null),
-  setSession: ({ token, user, tenant }) => {
+  setSession: ({ token, user }) => {
     window.sessionStorage.setItem("wcstransfer_portal_token", token || "");
     window.sessionStorage.setItem("wcstransfer_portal_user", JSON.stringify(user || null));
-    window.sessionStorage.setItem("wcstransfer_portal_tenant", JSON.stringify(tenant || null));
     window.localStorage.removeItem("wcstransfer_portal_token");
     window.localStorage.removeItem("wcstransfer_portal_user");
     window.localStorage.removeItem("wcstransfer_portal_tenant");
-    set({ token: token || "", user: user || null, tenant: tenant || null });
+    set({ token: token || "", user: user || null });
   },
   clearSession: () => {
     window.sessionStorage.removeItem("wcstransfer_portal_token");
     window.sessionStorage.removeItem("wcstransfer_portal_user");
-    window.sessionStorage.removeItem("wcstransfer_portal_tenant");
     window.localStorage.removeItem("wcstransfer_portal_token");
     window.localStorage.removeItem("wcstransfer_portal_user");
     window.localStorage.removeItem("wcstransfer_portal_tenant");
-    set({ token: "", user: null, tenant: null });
+    set({ token: "", user: null });
   },
 }));
 

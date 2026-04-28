@@ -67,58 +67,43 @@ export const fetchProviders = async () => {
   return response.data;
 };
 
-export const fetchTenants = async () => {
-  const response = await createClient().get("/admin/tenants");
+export const fetchUsers = async () => {
+  const response = await createClient().get("/admin/users");
   return response.data;
 };
 
-export const createTenant = async (payload) => {
-  const response = await createClient().post("/admin/tenants", payload);
+export const createUser = async (payload) => {
+  const response = await createClient().post("/admin/users", payload);
   return response.data;
 };
 
-export const updateTenant = async (id, payload) => {
-  const response = await createClient().put(`/admin/tenants/${id}`, payload);
+export const updateUserStatus = async (id, payload) => {
+  const response = await createClient().put(`/admin/users/${id}/status`, payload);
   return response.data;
 };
 
-export const fetchTenantUsers = async (id) => {
-  const response = await createClient().get(`/admin/tenants/${id}/users`);
+export const resetUserPassword = async (id, payload) => {
+  const response = await createClient().post(`/admin/users/${id}/reset-password`, payload);
   return response.data;
 };
 
-export const createTenantUser = async (id, payload) => {
-  const response = await createClient().post(`/admin/tenants/${id}/users`, payload);
+export const adjustUserWallet = async (id, payload) => {
+  const response = await createClient().post(`/admin/users/${id}/wallet/adjust`, payload);
   return response.data;
 };
 
-export const updateTenantUserStatus = async (tenantId, userId, payload) => {
-  const response = await createClient().put(`/admin/tenants/${tenantId}/users/${userId}/status`, payload);
+export const correctUserWallet = async (id, payload) => {
+  const response = await createClient().post(`/admin/users/${id}/wallet/correct`, payload);
   return response.data;
 };
 
-export const resetTenantUserPassword = async (tenantId, userId, payload) => {
-  const response = await createClient().post(`/admin/tenants/${tenantId}/users/${userId}/reset-password`, payload);
+export const fetchUserWalletLedger = async (id, params = { page: 1, page_size: 20 }) => {
+  const response = await createClient().get(`/admin/users/${id}/wallet/ledger`, { params });
   return response.data;
 };
 
-export const adjustTenantWallet = async (id, payload) => {
-  const response = await createClient().post(`/admin/tenants/${id}/wallet/adjust`, payload);
-  return response.data;
-};
-
-export const correctTenantWallet = async (id, payload) => {
-  const response = await createClient().post(`/admin/tenants/${id}/wallet/correct`, payload);
-  return response.data;
-};
-
-export const fetchTenantWalletLedger = async (id, params = { page: 1, page_size: 20 }) => {
-  const response = await createClient().get(`/admin/tenants/${id}/wallet/ledger`, { params });
-  return response.data;
-};
-
-export const exportTenantBilling = async (id, params = {}) => {
-  const response = await createClient().get(`/admin/tenants/${id}/billing/export`, {
+export const exportUserBilling = async (id, params = {}) => {
+  const response = await createClient().get(`/admin/users/${id}/billing/export`, {
     params,
     responseType: "blob",
   });

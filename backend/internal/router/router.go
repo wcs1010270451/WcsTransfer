@@ -16,17 +16,17 @@ import (
 	adminauthsvc "wcstransfer/backend/internal/service/adminauth"
 	"wcstransfer/backend/internal/service/clientquota"
 	"wcstransfer/backend/internal/service/keyhealth"
-	"wcstransfer/backend/internal/service/tenantauth"
+	"wcstransfer/backend/internal/service/userauth"
 )
 
 type Stores struct {
-	Admin      repository.AdminStore
-	AdminAuth  repository.AdminAuthStore
-	Auth       repository.ClientAuthStore
-	Log        repository.RequestLogWriter
-	Public     repository.PublicModelStore
-	TenantAuth repository.TenantAuthStore
-	TenantKeys repository.TenantClientKeyStore
+	Admin     repository.AdminStore
+	AdminAuth repository.AdminAuthStore
+	Auth      repository.ClientAuthStore
+	Log       repository.RequestLogWriter
+	Public    repository.PublicModelStore
+	UserAuth  repository.UserAuthStore
+	UserKeys  repository.UserClientKeyStore
 }
 
 func New(cfg config.Config, deps *platform.Dependencies, stores *Stores) *gin.Engine {
@@ -49,8 +49,8 @@ func New(cfg config.Config, deps *platform.Dependencies, stores *Stores) *gin.En
 	openAIHandler := openai.NewHandler(resolvedStores.Public, resolvedStores.Log, nil, tracker, quota)
 	adminHandler := admin.NewHandler(resolvedStores.Admin, tracker, quota)
 	adminAuthHandler := adminauthapi.NewHandler(resolvedStores.AdminAuth, adminTokenService)
-	tenantTokenService := tenantauth.New(cfg.AuthTokenSecret)
-	tenantHandler := tenant.NewHandler(resolvedStores.TenantAuth, resolvedStores.TenantKeys, tenantTokenService)
+	userTokenService := userauth.New(cfg.AuthTokenSecret)
+	userHandler := tenant.NewHandler(resolvedStores.UserAuth, resolvedStores.UserKeys, userTokenService)
 	enableDocs := cfg.EnableDocs || cfg.Env == "test"
 	enableAdminDebug := cfg.EnableAdminDebug || cfg.Env == "test"
 
@@ -65,7 +65,7 @@ func New(cfg config.Config, deps *platform.Dependencies, stores *Stores) *gin.En
 	authGroup := engine.Group("/portal/auth")
 	authGroup.Use(middleware.NoStore())
 	{
-		authGroup.POST("/login", tenantHandler.Login)
+		authGroup.POST("/login", userHandler.Login)
 	}
 
 	adminAuthGroup := engine.Group("/admin/auth")
@@ -76,18 +76,18 @@ func New(cfg config.Config, deps *platform.Dependencies, stores *Stores) *gin.En
 
 	portalGroup := engine.Group("/portal")
 	portalGroup.Use(middleware.NoStore())
-	portalGroup.Use(middleware.TenantUserAuth(tenantTokenService))
+	portalGroup.Use(middleware.TenantUserAuth(userTokenService))
 	{
-		portalGroup.GET("/me", tenantHandler.Me)
-		portalGroup.GET("/models", tenantHandler.Models)
-		portalGroup.GET("/stats", tenantHandler.Stats)
-		portalGroup.GET("/wallet/ledger", tenantHandler.WalletLedger)
-		portalGroup.GET("/billing/export", tenantHandler.ExportBilling)
-		portalGroup.GET("/logs", tenantHandler.Logs)
-		portalGroup.GET("/logs/:id", tenantHandler.LogDetail)
-		portalGroup.GET("/client-keys", tenantHandler.ListClientKeys)
-		portalGroup.POST("/client-keys", tenantHandler.CreateClientKey)
-		portalGroup.POST("/client-keys/:id/disable", tenantHandler.DisableClientKey)
+		portalGroup.GET("/me", userHandler.Me)
+		portalGroup.GET("/models", userHandler.Models)
+		portalGroup.GET("/stats", userHandler.Stats)
+		portalGroup.GET("/wallet/ledger", userHandler.WalletLedger)
+		portalGroup.GET("/billing/export", userHandler.ExportBilling)
+		portalGroup.GET("/logs", userHandler.Logs)
+		portalGroup.GET("/logs/:id", userHandler.LogDetail)
+		portalGroup.GET("/client-keys", userHandler.ListClientKeys)
+		portalGroup.POST("/client-keys", userHandler.CreateClientKey)
+		portalGroup.POST("/client-keys/:id/disable", userHandler.DisableClientKey)
 	}
 
 	v1 := engine.Group("/v1")
@@ -110,17 +110,14 @@ func New(cfg config.Config, deps *platform.Dependencies, stores *Stores) *gin.En
 		adminGroup.GET("/providers", adminHandler.ListProviders)
 		adminGroup.POST("/providers", adminHandler.CreateProvider)
 		adminGroup.PUT("/providers/:id", adminHandler.UpdateProvider)
-		adminGroup.GET("/tenants", adminHandler.ListTenants)
-		adminGroup.POST("/tenants", adminHandler.CreateTenant)
-		adminGroup.PUT("/tenants/:id", adminHandler.UpdateTenant)
-		adminGroup.GET("/tenants/:id/users", adminHandler.ListTenantUsers)
-		adminGroup.POST("/tenants/:id/users", adminHandler.CreateTenantUser)
-		adminGroup.PUT("/tenants/:id/users/:userId/status", adminHandler.UpdateTenantUserStatus)
-		adminGroup.POST("/tenants/:id/users/:userId/reset-password", adminHandler.ResetTenantUserPassword)
-		adminGroup.POST("/tenants/:id/wallet/adjust", adminHandler.AdjustTenantWallet)
-		adminGroup.POST("/tenants/:id/wallet/correct", adminHandler.CorrectTenantWallet)
-		adminGroup.GET("/tenants/:id/wallet/ledger", adminHandler.ListTenantWalletLedger)
-		adminGroup.GET("/tenants/:id/billing/export", adminHandler.ExportTenantBilling)
+		adminGroup.GET("/users", adminHandler.ListUsers)
+		adminGroup.POST("/users", adminHandler.CreateUser)
+		adminGroup.PUT("/users/:id/status", adminHandler.UpdateUserStatus)
+		adminGroup.POST("/users/:id/reset-password", adminHandler.ResetUserPassword)
+		adminGroup.POST("/users/:id/wallet/adjust", adminHandler.AdjustUserWallet)
+		adminGroup.POST("/users/:id/wallet/correct", adminHandler.CorrectUserWallet)
+		adminGroup.GET("/users/:id/wallet/ledger", adminHandler.ListUserWalletLedger)
+		adminGroup.GET("/users/:id/billing/export", adminHandler.ExportUserBilling)
 		adminGroup.GET("/client-keys", adminHandler.ListClientAPIKeys)
 		adminGroup.POST("/client-keys", adminHandler.CreateClientAPIKey)
 		adminGroup.PUT("/client-keys/:id", adminHandler.UpdateClientAPIKey)
@@ -134,7 +131,7 @@ func New(cfg config.Config, deps *platform.Dependencies, stores *Stores) *gin.En
 		adminGroup.GET("/logs/export", adminHandler.ExportLogs)
 		adminGroup.GET("/logs/:id", adminHandler.GetLogDetail)
 		adminGroup.GET("/stats", adminHandler.GetStats)
-		adminGroup.GET("/reconciliation/tenants", adminHandler.GetTenantBillingReconciliation)
+		adminGroup.GET("/reconciliation/users", adminHandler.GetUserBillingReconciliation)
 		if enableAdminDebug {
 			adminGroup.POST("/debug/chat/completions", openAIHandler.AdminDebugChatCompletions)
 			adminGroup.POST("/debug/embeddings", openAIHandler.AdminDebugEmbeddings)
@@ -160,8 +157,8 @@ func resolveStores(deps *platform.Dependencies, stores *Stores) *Stores {
 		resolved.Auth = store
 		resolved.Log = store
 		resolved.Public = store
-		resolved.TenantAuth = store
-		resolved.TenantKeys = store
+		resolved.UserAuth = store
+		resolved.UserKeys = store
 	}
 
 	return resolved

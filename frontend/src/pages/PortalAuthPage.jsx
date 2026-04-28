@@ -11,7 +11,7 @@ export default function PortalAuthPage() {
   const handleLogin = async (values) => {
     try {
       const result = await loginPortalUser(values);
-      setSession({ token: result.token, user: result.user, tenant: result.tenant || null });
+      setSession({ token: result.token, user: result.user });
       message.success("登录成功");
       navigate("/portal/keys", { replace: true });
     } catch (error) {
@@ -24,12 +24,12 @@ export default function PortalAuthPage() {
       <Card style={{ width: "100%", maxWidth: 720, borderRadius: 28 }}>
         <Space direction="vertical" size={20} style={{ width: "100%" }}>
           <div>
-            <Typography.Text className="hero-eyebrow">租户入口</Typography.Text>
+            <Typography.Text className="hero-eyebrow">用户入口</Typography.Text>
             <Typography.Title level={2} style={{ marginTop: 10, marginBottom: 6 }}>
-              租户登录
+              用户登录
             </Typography.Title>
             <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-              当前仅开放已有租户账号登录。新租户和用户由管理员后台统一创建与分配。
+              请使用管理员分配的账号登录。账号由管理员后台统一创建与管理。
             </Typography.Paragraph>
           </div>
 

@@ -41,21 +41,21 @@ func PublicAPIAuth(store repository.ClientAuthStore, logWriter repository.Reques
 			})
 			return
 		}
-		if clientKey.TenantID > 0 && clientKey.TenantWalletBalance <= 0 {
-			writeAuthRejectionLog(c, logWriter, clientKey, 402, "wallet_empty", "tenant wallet balance is empty")
+		if clientKey.UserID > 0 && clientKey.UserWalletBalance <= 0 {
+			writeAuthRejectionLog(c, logWriter, clientKey, 402, "wallet_empty", "wallet balance is empty")
 			c.AbortWithStatusJSON(402, gin.H{
 				"error": gin.H{
-					"message": "tenant wallet balance is empty",
+					"message": "wallet balance is empty",
 					"type":    "wallet_empty",
 				},
 			})
 			return
 		}
-		if clientKey.TenantID > 0 && clientKey.TenantWalletBalance < clientKey.TenantMinAvailableBalance {
-			writeAuthRejectionLog(c, logWriter, clientKey, 402, "wallet_below_minimum", "tenant wallet balance is below the minimum available balance")
+		if clientKey.UserID > 0 && clientKey.UserWalletBalance < clientKey.UserMinAvailBalance {
+			writeAuthRejectionLog(c, logWriter, clientKey, 402, "wallet_below_minimum", "wallet balance is below the minimum available balance")
 			c.AbortWithStatusJSON(402, gin.H{
 				"error": gin.H{
-					"message": "tenant wallet balance is below the minimum available balance",
+					"message": "wallet balance is below the minimum available balance",
 					"type":    "wallet_below_minimum",
 				},
 			})
@@ -75,11 +75,11 @@ func writeAuthRejectionLog(c *gin.Context, logWriter repository.RequestLogWriter
 	startedAt := time.Now()
 	latencyMS := int(time.Since(startedAt).Milliseconds())
 	metadata, _ := json.Marshal(map[string]any{
-		"tenant_id":                    clientKey.TenantID,
-		"tenant_name":                  clientKey.TenantName,
-		"tenant_wallet_balance":        clientKey.TenantWalletBalance,
-		"tenant_min_available_balance": clientKey.TenantMinAvailableBalance,
-		"client_api_key_name":          clientKey.Name,
+		"user_id":                 clientKey.UserID,
+		"user_email":              clientKey.UserEmail,
+		"user_wallet_balance":     clientKey.UserWalletBalance,
+		"user_min_avail_balance":  clientKey.UserMinAvailBalance,
+		"client_api_key_name":     clientKey.Name,
 	})
 	_, _ = logWriter.CreateRequestLog(c.Request.Context(), entity.CreateRequestLogInput{
 		TraceID:         strings.TrimSpace(c.Writer.Header().Get("X-Request-Id")),

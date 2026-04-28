@@ -9,19 +9,19 @@ import (
 )
 
 type stubStore struct {
-	items []entity.TenantBillingDebitAnomaly
+	items []entity.UserBillingDebitAnomaly
 }
 
 type stubNotifier struct {
 	calls int
-	items []entity.TenantBillingDebitAnomaly
+	items []entity.UserBillingDebitAnomaly
 }
 
-func (s *stubStore) GetTenantBillingDebitAnomalies(context.Context, time.Time, int, float64) ([]entity.TenantBillingDebitAnomaly, error) {
+func (s *stubStore) GetUserBillingDebitAnomalies(context.Context, time.Time, int, float64) ([]entity.UserBillingDebitAnomaly, error) {
 	return s.items, nil
 }
 
-func (s *stubNotifier) SendTenantBillingDebitAnomaly(_ context.Context, item entity.TenantBillingDebitAnomaly, _ time.Duration) error {
+func (s *stubNotifier) SendUserBillingDebitAnomaly(_ context.Context, item entity.UserBillingDebitAnomaly, _ time.Duration) error {
 	s.calls++
 	s.items = append(s.items, item)
 	return nil
@@ -29,8 +29,8 @@ func (s *stubNotifier) SendTenantBillingDebitAnomaly(_ context.Context, item ent
 
 func TestRunOnceAlertsOnlyOnceUntilRecovered(t *testing.T) {
 	store := &stubStore{
-		items: []entity.TenantBillingDebitAnomaly{
-			{TenantID: 1, TenantName: "tenant-a", MissingDebitCount: 2, MissingBillableAmount: 1.2, IsCountAnomalous: true},
+		items: []entity.UserBillingDebitAnomaly{
+			{UserID: 1, UserEmail: "user-a@test.com", MissingDebitCount: 2, MissingBillableAmount: 1.2, IsCountAnomalous: true},
 		},
 	}
 	notifier := &stubNotifier{}
@@ -46,8 +46,8 @@ func TestRunOnceAlertsOnlyOnceUntilRecovered(t *testing.T) {
 	store.items = nil
 	service.runOnce(context.Background())
 
-	store.items = []entity.TenantBillingDebitAnomaly{
-		{TenantID: 1, TenantName: "tenant-a", MissingDebitCount: 1, MissingBillableAmount: 0.5, IsCountAnomalous: true},
+	store.items = []entity.UserBillingDebitAnomaly{
+		{UserID: 1, UserEmail: "user-a@test.com", MissingDebitCount: 1, MissingBillableAmount: 0.5, IsCountAnomalous: true},
 	}
 	service.runOnce(context.Background())
 

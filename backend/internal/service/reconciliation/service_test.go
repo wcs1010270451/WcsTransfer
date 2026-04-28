@@ -9,19 +9,19 @@ import (
 )
 
 type stubStore struct {
-	items []entity.TenantBillingReconciliation
+	items []entity.UserBillingReconciliation
 }
 
 type stubNotifier struct {
 	calls int
-	items []entity.TenantBillingReconciliation
+	items []entity.UserBillingReconciliation
 }
 
-func (s *stubStore) GetTenantBillingReconciliation(context.Context) ([]entity.TenantBillingReconciliation, error) {
+func (s *stubStore) GetUserBillingReconciliation(context.Context) ([]entity.UserBillingReconciliation, error) {
 	return s.items, nil
 }
 
-func (s *stubNotifier) SendReconciliationMismatch(_ context.Context, item entity.TenantBillingReconciliation) error {
+func (s *stubNotifier) SendReconciliationMismatch(_ context.Context, item entity.UserBillingReconciliation) error {
 	s.calls++
 	s.items = append(s.items, item)
 	return nil
@@ -40,10 +40,10 @@ func TestNewDefaults(t *testing.T) {
 func TestRunOnceSendsAlertForMismatch(t *testing.T) {
 	notifier := &stubNotifier{}
 	service := New(&stubStore{
-		items: []entity.TenantBillingReconciliation{
+		items: []entity.UserBillingReconciliation{
 			{
-				TenantID:           1,
-				TenantName:         "tenant-a",
+				UserID:             1,
+				UserEmail:          "user-a@test.com",
 				WalletVsLedgerDiff: 0.2,
 				LedgerVsLogsDiff:   0,
 			},
@@ -60,10 +60,10 @@ func TestRunOnceSendsAlertForMismatch(t *testing.T) {
 func TestRunOnceSkipsBalancedItems(t *testing.T) {
 	notifier := &stubNotifier{}
 	service := New(&stubStore{
-		items: []entity.TenantBillingReconciliation{
+		items: []entity.UserBillingReconciliation{
 			{
-				TenantID:           1,
-				TenantName:         "tenant-a",
+				UserID:             1,
+				UserEmail:          "user-a@test.com",
 				WalletVsLedgerDiff: 0.00001,
 				LedgerVsLogsDiff:   0.00001,
 			},
@@ -79,10 +79,10 @@ func TestRunOnceSkipsBalancedItems(t *testing.T) {
 
 func TestRunOnceAlertsOnlyOnceUntilRecovered(t *testing.T) {
 	store := &stubStore{
-		items: []entity.TenantBillingReconciliation{
+		items: []entity.UserBillingReconciliation{
 			{
-				TenantID:           1,
-				TenantName:         "tenant-a",
+				UserID:             1,
+				UserEmail:          "user-a@test.com",
 				WalletVsLedgerDiff: 0.2,
 			},
 		},
@@ -97,20 +97,20 @@ func TestRunOnceAlertsOnlyOnceUntilRecovered(t *testing.T) {
 		t.Fatalf("expected 1 alert before recovery, got %d", notifier.calls)
 	}
 
-	store.items = []entity.TenantBillingReconciliation{
+	store.items = []entity.UserBillingReconciliation{
 		{
-			TenantID:           1,
-			TenantName:         "tenant-a",
+			UserID:             1,
+			UserEmail:          "user-a@test.com",
 			WalletVsLedgerDiff: 0,
 			LedgerVsLogsDiff:   0,
 		},
 	}
 	service.runOnce(context.Background())
 
-	store.items = []entity.TenantBillingReconciliation{
+	store.items = []entity.UserBillingReconciliation{
 		{
-			TenantID:           1,
-			TenantName:         "tenant-a",
+			UserID:             1,
+			UserEmail:          "user-a@test.com",
 			WalletVsLedgerDiff: 0.2,
 		},
 	}

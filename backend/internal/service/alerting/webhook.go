@@ -37,7 +37,7 @@ func NewWebhookNotifier(url string, provider string, timeout time.Duration) *Web
 	}
 }
 
-func (n *WebhookNotifier) SendReconciliationMismatch(ctx context.Context, item entity.TenantBillingReconciliation) error {
+func (n *WebhookNotifier) SendReconciliationMismatch(ctx context.Context, item entity.UserBillingReconciliation) error {
 	if n == nil || n.url == "" {
 		return nil
 	}
@@ -95,12 +95,12 @@ func (n *WebhookNotifier) SendProviderRequestAnomaly(ctx context.Context, item e
 	return nil
 }
 
-func (n *WebhookNotifier) SendTenantWalletBlockAnomaly(ctx context.Context, item entity.TenantWalletBlockAnomaly, window time.Duration) error {
+func (n *WebhookNotifier) SendUserWalletBlockAnomaly(ctx context.Context, item entity.UserWalletBlockAnomaly, window time.Duration) error {
 	if n == nil || n.url == "" {
 		return nil
 	}
 
-	body, err := n.buildTenantWalletBlockPayload(item, window)
+	body, err := n.buildUserWalletBlockPayload(item, window)
 	if err != nil {
 		return err
 	}
@@ -124,12 +124,12 @@ func (n *WebhookNotifier) SendTenantWalletBlockAnomaly(ctx context.Context, item
 	return nil
 }
 
-func (n *WebhookNotifier) SendTenantBillingDebitAnomaly(ctx context.Context, item entity.TenantBillingDebitAnomaly, window time.Duration) error {
+func (n *WebhookNotifier) SendUserBillingDebitAnomaly(ctx context.Context, item entity.UserBillingDebitAnomaly, window time.Duration) error {
 	if n == nil || n.url == "" {
 		return nil
 	}
 
-	body, err := n.buildTenantBillingDebitPayload(item, window)
+	body, err := n.buildUserBillingDebitPayload(item, window)
 	if err != nil {
 		return err
 	}
@@ -182,33 +182,24 @@ func (n *WebhookNotifier) SendDependencyAnomaly(ctx context.Context, dependency 
 	return nil
 }
 
-func (n *WebhookNotifier) buildPayload(item entity.TenantBillingReconciliation) ([]byte, error) {
+func (n *WebhookNotifier) buildPayload(item entity.UserBillingReconciliation) ([]byte, error) {
 	content := fmt.Sprintf(
-		"[WcsTransfer] 对账异常 tenant_id=%d tenant_name=%s wallet_balance=%.4f ledger_net=%.4f wallet_vs_ledger_diff=%.4f ledger_debit=%.4f log_billable=%.4f ledger_vs_logs_diff=%.4f",
-		item.TenantID,
-		item.TenantName,
-		item.WalletBalance,
-		item.LedgerNetAmount,
-		item.WalletVsLedgerDiff,
-		item.LedgerDebitAmount,
-		item.LogBillableAmount,
-		item.LedgerVsLogsDiff,
+		"[WcsTransfer] 对账异常 user_id=%d user_email=%s wallet_balance=%.4f ledger_net=%.4f wallet_vs_ledger_diff=%.4f ledger_debit=%.4f log_billable=%.4f ledger_vs_logs_diff=%.4f",
+		item.UserID, item.UserEmail,
+		item.WalletBalance, item.LedgerNetAmount, item.WalletVsLedgerDiff,
+		item.LedgerDebitAmount, item.LogBillableAmount, item.LedgerVsLogsDiff,
 	)
 
 	switch n.provider {
 	case "wecom":
 		return json.Marshal(map[string]any{
 			"msgtype": "text",
-			"text": map[string]string{
-				"content": content,
-			},
+			"text":    map[string]string{"content": content},
 		})
 	case "feishu":
 		return json.Marshal(map[string]any{
 			"msg_type": "text",
-			"content": map[string]string{
-				"text": content,
-			},
+			"content":  map[string]string{"text": content},
 		})
 	default:
 		return json.Marshal(map[string]any{
@@ -218,8 +209,8 @@ func (n *WebhookNotifier) buildPayload(item entity.TenantBillingReconciliation) 
 			"message":   content,
 			"timestamp": n.now().UTC().Format(time.RFC3339),
 			"data": map[string]any{
-				"tenant_id":             item.TenantID,
-				"tenant_name":           item.TenantName,
+				"user_id":               item.UserID,
+				"user_email":            item.UserEmail,
 				"wallet_balance":        item.WalletBalance,
 				"ledger_credit_amount":  item.LedgerCreditAmount,
 				"ledger_debit_amount":   item.LedgerDebitAmount,
@@ -284,41 +275,33 @@ func (n *WebhookNotifier) buildProviderAnomalyPayload(item entity.ProviderReques
 	}
 }
 
-func (n *WebhookNotifier) buildTenantWalletBlockPayload(item entity.TenantWalletBlockAnomaly, window time.Duration) ([]byte, error) {
+func (n *WebhookNotifier) buildUserWalletBlockPayload(item entity.UserWalletBlockAnomaly, window time.Duration) ([]byte, error) {
 	content := fmt.Sprintf(
-		"[WcsTransfer] 钱包拦截异常 tenant_id=%d tenant_name=%s window=%s wallet_blocked_count=%d reserve_blocked_count=%d",
-		item.TenantID,
-		item.TenantName,
-		window,
-		item.WalletBlockedCount,
-		item.ReserveBlockedCount,
+		"[WcsTransfer] 钱包拦截异常 user_id=%d user_email=%s window=%s wallet_blocked_count=%d reserve_blocked_count=%d",
+		item.UserID, item.UserEmail, window, item.WalletBlockedCount, item.ReserveBlockedCount,
 	)
 
 	switch n.provider {
 	case "wecom":
 		return json.Marshal(map[string]any{
 			"msgtype": "text",
-			"text": map[string]string{
-				"content": content,
-			},
+			"text":    map[string]string{"content": content},
 		})
 	case "feishu":
 		return json.Marshal(map[string]any{
 			"msg_type": "text",
-			"content": map[string]string{
-				"text": content,
-			},
+			"content":  map[string]string{"text": content},
 		})
 	default:
 		return json.Marshal(map[string]any{
-			"event":     "tenant_wallet_block_anomaly",
+			"event":     "user_wallet_block_anomaly",
 			"level":     "error",
 			"source":    "wcstransfer.wallet",
 			"message":   content,
 			"timestamp": n.now().UTC().Format(time.RFC3339),
 			"data": map[string]any{
-				"tenant_id":                    item.TenantID,
-				"tenant_name":                  item.TenantName,
+				"user_id":                      item.UserID,
+				"user_email":                   item.UserEmail,
 				"window":                       window.String(),
 				"wallet_blocked_count":         item.WalletBlockedCount,
 				"reserve_blocked_count":        item.ReserveBlockedCount,
@@ -329,42 +312,34 @@ func (n *WebhookNotifier) buildTenantWalletBlockPayload(item entity.TenantWallet
 	}
 }
 
-func (n *WebhookNotifier) buildTenantBillingDebitPayload(item entity.TenantBillingDebitAnomaly, window time.Duration) ([]byte, error) {
+func (n *WebhookNotifier) buildUserBillingDebitPayload(item entity.UserBillingDebitAnomaly, window time.Duration) ([]byte, error) {
 	content := fmt.Sprintf(
-		"[WcsTransfer] 扣费异常 tenant_id=%d tenant_name=%s window=%s missing_debit_count=%d missing_billable_amount=%.4f missing_cost_amount=%.4f",
-		item.TenantID,
-		item.TenantName,
-		window,
-		item.MissingDebitCount,
-		item.MissingBillableAmount,
-		item.MissingCostAmount,
+		"[WcsTransfer] 扣费异常 user_id=%d user_email=%s window=%s missing_debit_count=%d missing_billable_amount=%.4f missing_cost_amount=%.4f",
+		item.UserID, item.UserEmail, window,
+		item.MissingDebitCount, item.MissingBillableAmount, item.MissingCostAmount,
 	)
 
 	switch n.provider {
 	case "wecom":
 		return json.Marshal(map[string]any{
 			"msgtype": "text",
-			"text": map[string]string{
-				"content": content,
-			},
+			"text":    map[string]string{"content": content},
 		})
 	case "feishu":
 		return json.Marshal(map[string]any{
 			"msg_type": "text",
-			"content": map[string]string{
-				"text": content,
-			},
+			"content":  map[string]string{"text": content},
 		})
 	default:
 		return json.Marshal(map[string]any{
-			"event":     "tenant_billing_debit_anomaly",
+			"event":     "user_billing_debit_anomaly",
 			"level":     "error",
 			"source":    "wcstransfer.billing",
 			"message":   content,
 			"timestamp": n.now().UTC().Format(time.RFC3339),
 			"data": map[string]any{
-				"tenant_id":                    item.TenantID,
-				"tenant_name":                  item.TenantName,
+				"user_id":                      item.UserID,
+				"user_email":                   item.UserEmail,
 				"window":                       window.String(),
 				"missing_debit_count":          item.MissingDebitCount,
 				"missing_billable_amount":      item.MissingBillableAmount,

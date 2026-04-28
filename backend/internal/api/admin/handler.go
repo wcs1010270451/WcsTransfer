@@ -56,47 +56,29 @@ type updateProviderRequest struct {
 	ExtraConfig  json.RawMessage `json:"extra_config"`
 }
 
-type updateTenantRequest struct {
-	Name                string  `json:"name" binding:"required"`
-	Slug                string  `json:"slug" binding:"required"`
-	Status              string  `json:"status" binding:"required"`
-	MaxClientKeys       int     `json:"max_client_keys"`
-	MinAvailableBalance float64 `json:"min_available_balance"`
-	Notes               string  `json:"notes"`
-}
-
-type createTenantRequest struct {
-	Name                string  `json:"name" binding:"required"`
-	Slug                string  `json:"slug" binding:"required"`
-	Status              string  `json:"status"`
-	MaxClientKeys       int     `json:"max_client_keys"`
-	MinAvailableBalance float64 `json:"min_available_balance"`
-	Notes               string  `json:"notes"`
-}
-
-type adjustTenantWalletRequest struct {
-	Amount float64 `json:"amount" binding:"required"`
-	Note   string  `json:"note"`
-}
-
-type correctTenantWalletRequest struct {
-	Amount float64 `json:"amount" binding:"required"`
-	Note   string  `json:"note" binding:"required"`
-}
-
-type createTenantUserRequest struct {
+type createUserRequest struct {
 	Email    string `json:"email" binding:"required"`
 	Password string `json:"password" binding:"required"`
 	FullName string `json:"full_name" binding:"required"`
 	Status   string `json:"status"`
 }
 
-type updateTenantUserStatusRequest struct {
+type updateUserStatusRequest struct {
 	Status string `json:"status" binding:"required"`
 }
 
-type resetTenantUserPasswordRequest struct {
+type resetUserPasswordRequest struct {
 	Password string `json:"password" binding:"required"`
+}
+
+type adjustUserWalletRequest struct {
+	Amount float64 `json:"amount" binding:"required"`
+	Note   string  `json:"note"`
+}
+
+type correctUserWalletRequest struct {
+	Amount float64 `json:"amount" binding:"required"`
+	Note   string  `json:"note" binding:"required"`
 }
 
 type createClientAPIKeyRequest struct {
@@ -189,77 +171,54 @@ func NewHandler(store repository.AdminStore, tracker *keyhealth.Tracker, quota *
 	return &Handler{store: store, keyHealth: tracker, quota: quota}
 }
 
-func (h *Handler) ListProviders(c *gin.Context) {
+func (h *Handler) ListUsers(c *gin.Context) {
 	if h.store == nil {
 		writeServiceUnavailable(c)
 		return
 	}
 
-	items, err := h.store.ListProviders(c.Request.Context())
+	items, err := h.store.ListUsers(c.Request.Context())
 	if err != nil {
 		writeDatabaseError(c, err)
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"items": items,
-		"total": len(items),
-	})
+	c.JSON(http.StatusOK, gin.H{"items": items, "total": len(items)})
 }
 
-func (h *Handler) ListTenants(c *gin.Context) {
+func (h *Handler) CreateUser(c *gin.Context) {
 	if h.store == nil {
 		writeServiceUnavailable(c)
 		return
 	}
 
-	items, err := h.store.ListTenants(c.Request.Context())
-	if err != nil {
-		writeDatabaseError(c, err)
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"items": items,
-		"total": len(items),
-	})
-}
-
-func (h *Handler) CreateTenant(c *gin.Context) {
-	if h.store == nil {
-		writeServiceUnavailable(c)
-		return
-	}
-
-	var request createTenantRequest
+	var request createUserRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
 		writeBadRequest(c, "invalid request body")
 		return
 	}
 
-	item, err := h.store.CreateTenant(c.Request.Context(), entity.CreateTenantInput{
-		Name:                strings.TrimSpace(request.Name),
-		Slug:                strings.TrimSpace(request.Slug),
-		Status:              defaultString(strings.TrimSpace(request.Status), "pending"),
-		MaxClientKeys:       request.MaxClientKeys,
-		MinAvailableBalance: request.MinAvailableBalance,
-		Notes:               strings.TrimSpace(request.Notes),
+	item, err := h.store.CreateUser(c.Request.Context(), entity.CreateUserInput{
+		Email:    strings.TrimSpace(request.Email),
+		Password: request.Password,
+		FullName: strings.TrimSpace(request.FullName),
+		Status:   defaultString(strings.TrimSpace(request.Status), "active"),
 	})
 	if err != nil {
 		writeDatabaseError(c, err)
 		return
 	}
 
-	h.recordAdminAction(c, "tenant.create", "tenant", item.ID, item.Name, gin.H{
-		"status":                item.Status,
-		"max_client_keys":       item.MaxClientKeys,
-		"min_available_balance": item.MinAvailableBalance,
+	h.recordAdminAction(c, "user.create", "user", item.ID, item.Email, gin.H{
+		"email":     item.Email,
+		"full_name": item.FullName,
+		"status":    item.Status,
 	})
 
 	c.JSON(http.StatusCreated, item)
 }
 
-func (h *Handler) UpdateTenant(c *gin.Context) {
+func (h *Handler) UpdateUserStatus(c *gin.Context) {
 	if h.store == nil {
 		writeServiceUnavailable(c)
 		return
@@ -270,36 +229,26 @@ func (h *Handler) UpdateTenant(c *gin.Context) {
 		return
 	}
 
-	var request updateTenantRequest
+	var request updateUserStatusRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
 		writeBadRequest(c, "invalid request body")
 		return
 	}
 
-	item, err := h.store.UpdateTenant(c.Request.Context(), entity.UpdateTenantInput{
-		ID:                  id,
-		Name:                strings.TrimSpace(request.Name),
-		Slug:                strings.TrimSpace(request.Slug),
-		Status:              strings.TrimSpace(request.Status),
-		MaxClientKeys:       request.MaxClientKeys,
-		MinAvailableBalance: request.MinAvailableBalance,
-		Notes:               strings.TrimSpace(request.Notes),
+	item, err := h.store.UpdateUserStatus(c.Request.Context(), entity.UpdateUserStatusInput{
+		UserID: id,
+		Status: strings.TrimSpace(request.Status),
 	})
 	if err != nil {
 		writeDatabaseError(c, err)
 		return
 	}
 
-	h.recordAdminAction(c, "tenant.update", "tenant", item.ID, item.Name, gin.H{
-		"status":                item.Status,
-		"max_client_keys":       item.MaxClientKeys,
-		"min_available_balance": item.MinAvailableBalance,
-	})
-
+	h.recordAdminAction(c, "user.update_status", "user", item.ID, item.Email, gin.H{"status": item.Status})
 	c.JSON(http.StatusOK, item)
 }
 
-func (h *Handler) ListTenantUsers(c *gin.Context) {
+func (h *Handler) ResetUserPassword(c *gin.Context) {
 	if h.store == nil {
 		writeServiceUnavailable(c)
 		return
@@ -310,137 +259,25 @@ func (h *Handler) ListTenantUsers(c *gin.Context) {
 		return
 	}
 
-	items, err := h.store.ListTenantUsers(c.Request.Context(), id)
-	if err != nil {
-		writeDatabaseError(c, err)
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"items": items,
-		"total": len(items),
-	})
-}
-
-func (h *Handler) CreateTenantUser(c *gin.Context) {
-	if h.store == nil {
-		writeServiceUnavailable(c)
-		return
-	}
-
-	id, ok := parseResourceID(c)
-	if !ok {
-		return
-	}
-
-	var request createTenantUserRequest
+	var request resetUserPasswordRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
 		writeBadRequest(c, "invalid request body")
 		return
 	}
 
-	item, err := h.store.CreateTenantUser(c.Request.Context(), entity.CreateTenantUserInput{
-		TenantID:  id,
-		Email:     strings.TrimSpace(request.Email),
-		Password:  request.Password,
-		FullName:  strings.TrimSpace(request.FullName),
-		Status:    defaultString(strings.TrimSpace(request.Status), "active"),
-		CreatedBy: h.currentAdminActor(c).UserID,
-	})
-	if err != nil {
-		writeDatabaseError(c, err)
-		return
-	}
-
-	h.recordAdminAction(c, "tenant.user.create", "tenant_user", item.ID, item.Email, gin.H{
-		"tenant_id":  item.TenantID,
-		"email":      item.Email,
-		"full_name":  item.FullName,
-		"user_status": item.Status,
-	})
-
-	c.JSON(http.StatusCreated, item)
-}
-
-func (h *Handler) UpdateTenantUserStatus(c *gin.Context) {
-	if h.store == nil {
-		writeServiceUnavailable(c)
-		return
-	}
-
-	tenantID, ok := parseResourceID(c)
-	if !ok {
-		return
-	}
-	userID, err := strconv.ParseInt(strings.TrimSpace(c.Param("userId")), 10, 64)
-	if err != nil || userID <= 0 {
-		writeBadRequest(c, "invalid user id")
-		return
-	}
-
-	var request updateTenantUserStatusRequest
-	if err := c.ShouldBindJSON(&request); err != nil {
-		writeBadRequest(c, "invalid request body")
-		return
-	}
-
-	item, err := h.store.UpdateTenantUserStatus(c.Request.Context(), entity.UpdateTenantUserStatusInput{
-		TenantID: tenantID,
-		UserID:   userID,
-		Status:   strings.TrimSpace(request.Status),
-	})
-	if err != nil {
-		writeDatabaseError(c, err)
-		return
-	}
-
-	h.recordAdminAction(c, "tenant.user.update_status", "tenant_user", item.ID, item.Email, gin.H{
-		"tenant_id":    item.TenantID,
-		"user_status":  item.Status,
-	})
-
-	c.JSON(http.StatusOK, item)
-}
-
-func (h *Handler) ResetTenantUserPassword(c *gin.Context) {
-	if h.store == nil {
-		writeServiceUnavailable(c)
-		return
-	}
-
-	tenantID, ok := parseResourceID(c)
-	if !ok {
-		return
-	}
-	userID, err := strconv.ParseInt(strings.TrimSpace(c.Param("userId")), 10, 64)
-	if err != nil || userID <= 0 {
-		writeBadRequest(c, "invalid user id")
-		return
-	}
-
-	var request resetTenantUserPasswordRequest
-	if err := c.ShouldBindJSON(&request); err != nil {
-		writeBadRequest(c, "invalid request body")
-		return
-	}
-
-	if err := h.store.ResetTenantUserPassword(c.Request.Context(), entity.ResetTenantUserPasswordInput{
-		TenantID: tenantID,
-		UserID:   userID,
+	if err := h.store.ResetUserPassword(c.Request.Context(), entity.ResetUserPasswordInput{
+		UserID:   id,
 		Password: request.Password,
 	}); err != nil {
 		writeDatabaseError(c, err)
 		return
 	}
 
-	h.recordAdminAction(c, "tenant.user.reset_password", "tenant_user", userID, "", gin.H{
-		"tenant_id": tenantID,
-	})
-
+	h.recordAdminAction(c, "user.reset_password", "user", id, "", nil)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
-func (h *Handler) AdjustTenantWallet(c *gin.Context) {
+func (h *Handler) AdjustUserWallet(c *gin.Context) {
 	if h.store == nil {
 		writeServiceUnavailable(c)
 		return
@@ -451,7 +288,7 @@ func (h *Handler) AdjustTenantWallet(c *gin.Context) {
 		return
 	}
 
-	var request adjustTenantWalletRequest
+	var request adjustUserWalletRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
 		writeBadRequest(c, "invalid request body")
 		return
@@ -461,8 +298,8 @@ func (h *Handler) AdjustTenantWallet(c *gin.Context) {
 		return
 	}
 
-	item, err := h.store.AdjustTenantWallet(c.Request.Context(), entity.TenantWalletAdjustmentInput{
-		TenantID:   id,
+	item, err := h.store.AdjustUserWallet(c.Request.Context(), entity.UserWalletAdjustmentInput{
+		UserID:     id,
 		Amount:     request.Amount,
 		Note:       strings.TrimSpace(request.Note),
 		OperatorID: h.currentAdminActor(c).UserID,
@@ -472,16 +309,15 @@ func (h *Handler) AdjustTenantWallet(c *gin.Context) {
 		return
 	}
 
-	h.recordAdminAction(c, "tenant.wallet.credit", "tenant", item.ID, item.Name, gin.H{
+	h.recordAdminAction(c, "user.wallet.credit", "user", item.ID, item.Email, gin.H{
 		"amount":         request.Amount,
 		"note":           strings.TrimSpace(request.Note),
 		"wallet_balance": item.WalletBalance,
 	})
-
 	c.JSON(http.StatusOK, item)
 }
 
-func (h *Handler) CorrectTenantWallet(c *gin.Context) {
+func (h *Handler) CorrectUserWallet(c *gin.Context) {
 	if h.store == nil {
 		writeServiceUnavailable(c)
 		return
@@ -492,7 +328,7 @@ func (h *Handler) CorrectTenantWallet(c *gin.Context) {
 		return
 	}
 
-	var request correctTenantWalletRequest
+	var request correctUserWalletRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
 		writeBadRequest(c, "invalid request body")
 		return
@@ -506,8 +342,8 @@ func (h *Handler) CorrectTenantWallet(c *gin.Context) {
 		return
 	}
 
-	item, err := h.store.CorrectTenantWallet(c.Request.Context(), entity.TenantWalletCorrectionInput{
-		TenantID:   id,
+	item, err := h.store.CorrectUserWallet(c.Request.Context(), entity.UserWalletCorrectionInput{
+		UserID:     id,
 		Amount:     request.Amount,
 		Note:       strings.TrimSpace(request.Note),
 		OperatorID: h.currentAdminActor(c).UserID,
@@ -517,16 +353,15 @@ func (h *Handler) CorrectTenantWallet(c *gin.Context) {
 		return
 	}
 
-	h.recordAdminAction(c, "tenant.wallet.reconcile", "tenant", item.ID, item.Name, gin.H{
+	h.recordAdminAction(c, "user.wallet.correct", "user", item.ID, item.Email, gin.H{
 		"amount":         request.Amount,
 		"note":           strings.TrimSpace(request.Note),
 		"wallet_balance": item.WalletBalance,
 	})
-
 	c.JSON(http.StatusOK, item)
 }
 
-func (h *Handler) ListTenantWalletLedger(c *gin.Context) {
+func (h *Handler) ListUserWalletLedger(c *gin.Context) {
 	if h.store == nil {
 		writeServiceUnavailable(c)
 		return
@@ -545,13 +380,126 @@ func (h *Handler) ListTenantWalletLedger(c *gin.Context) {
 		return
 	}
 
-	items, err := h.store.ListTenantWalletLedger(c.Request.Context(), id, page, pageSize)
+	items, err := h.store.ListUserWalletLedger(c.Request.Context(), id, page, pageSize)
 	if err != nil {
 		writeDatabaseError(c, err)
 		return
 	}
 
 	c.JSON(http.StatusOK, items)
+}
+
+func (h *Handler) ExportUserBilling(c *gin.Context) {
+	if h.store == nil {
+		writeServiceUnavailable(c)
+		return
+	}
+
+	id, ok := parseResourceID(c)
+	if !ok {
+		return
+	}
+	httpStatus, ok := parseNonNegativeIntQuery(c, "http_status")
+	if !ok {
+		return
+	}
+	createdFrom, ok := parseTimeQuery(c, "created_from")
+	if !ok {
+		return
+	}
+	createdTo, ok := parseTimeQuery(c, "created_to")
+	if !ok {
+		return
+	}
+
+	var success *bool
+	if rawSuccess := strings.TrimSpace(c.Query("success")); rawSuccess != "" {
+		parsed, err := strconv.ParseBool(rawSuccess)
+		if err != nil {
+			writeBadRequest(c, "success must be true or false")
+			return
+		}
+		success = &parsed
+	}
+
+	items, err := h.store.ExportUserRequestLogs(c.Request.Context(), id, entity.ListRequestLogsInput{
+		ModelPublicName: strings.TrimSpace(c.Query("model_public_name")),
+		Success:         success,
+		HTTPStatus:      httpStatus,
+		TraceID:         strings.TrimSpace(c.Query("trace_id")),
+		CreatedFrom:     createdFrom,
+		CreatedTo:       createdTo,
+	})
+	if err != nil {
+		writeDatabaseError(c, err)
+		return
+	}
+
+	buffer := bytes.NewBuffer(nil)
+	writer := csv.NewWriter(buffer)
+	_ = writer.Write([]string{
+		"id", "trace_id", "client_api_key_name", "provider_name", "provider_key_name",
+		"model_public_name", "request_type", "http_status", "success", "latency_ms",
+		"prompt_tokens", "completion_tokens", "total_tokens",
+		"reserved_amount", "cost_amount", "billable_amount", "gross_profit",
+		"error_type", "error_message", "created_at",
+	})
+	for _, item := range items {
+		_ = writer.Write([]string{
+			strconv.FormatInt(item.ID, 10),
+			item.TraceID, item.ClientAPIKeyName, item.ProviderName, item.ProviderKeyName,
+			item.ModelPublicName, item.RequestType,
+			strconv.Itoa(item.HTTPStatus), strconv.FormatBool(item.Success), strconv.Itoa(item.LatencyMS),
+			strconv.Itoa(item.PromptTokens), strconv.Itoa(item.CompletionTokens), strconv.Itoa(item.TotalTokens),
+			strconv.FormatFloat(item.ReservedAmount, 'f', 8, 64),
+			strconv.FormatFloat(item.CostAmount, 'f', 8, 64),
+			strconv.FormatFloat(item.BillableAmount, 'f', 8, 64),
+			strconv.FormatFloat(item.BillableAmount-item.CostAmount, 'f', 8, 64),
+			item.ErrorType, item.ErrorMessage, item.CreatedAt.Format(time.RFC3339),
+		})
+	}
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		writeDatabaseError(c, err)
+		return
+	}
+
+	c.Header("Content-Type", "text/csv; charset=utf-8")
+	c.Header("Content-Disposition", `attachment; filename="user_billing.csv"`)
+	c.Data(http.StatusOK, "text/csv; charset=utf-8", buffer.Bytes())
+}
+
+func (h *Handler) GetUserBillingReconciliation(c *gin.Context) {
+	if h.store == nil {
+		writeServiceUnavailable(c)
+		return
+	}
+
+	items, err := h.store.GetUserBillingReconciliation(c.Request.Context())
+	if err != nil {
+		writeDatabaseError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"items": items, "total": len(items)})
+}
+
+func (h *Handler) ListProviders(c *gin.Context) {
+	if h.store == nil {
+		writeServiceUnavailable(c)
+		return
+	}
+
+	items, err := h.store.ListProviders(c.Request.Context())
+	if err != nil {
+		writeDatabaseError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"items": items,
+		"total": len(items),
+	})
 }
 
 func (h *Handler) CreateProvider(c *gin.Context) {
@@ -710,7 +658,7 @@ func (h *Handler) CreateClientAPIKey(c *gin.Context) {
 	}
 
 	h.recordAdminAction(c, "client_key.create", "client_api_key", item.ID, item.Name, gin.H{
-		"tenant_id":          item.TenantID,
+		"user_id":            item.UserID,
 		"status":             item.Status,
 		"allowed_model_ids":  item.AllowedModelIDs,
 		"daily_cost_limit":   item.DailyCostLimit,
@@ -769,7 +717,7 @@ func (h *Handler) UpdateClientAPIKey(c *gin.Context) {
 	}
 
 	h.recordAdminAction(c, "client_key.update", "client_api_key", item.ID, item.Name, gin.H{
-		"tenant_id":          item.TenantID,
+		"user_id":            item.UserID,
 		"status":             item.Status,
 		"allowed_model_ids":  item.AllowedModelIDs,
 		"daily_cost_limit":   item.DailyCostLimit,
@@ -1189,111 +1137,6 @@ func (h *Handler) ExportLogs(c *gin.Context) {
 	c.Data(http.StatusOK, "text/csv; charset=utf-8", buffer.Bytes())
 }
 
-func (h *Handler) ExportTenantBilling(c *gin.Context) {
-	if h.store == nil {
-		writeServiceUnavailable(c)
-		return
-	}
-
-	id, ok := parseResourceID(c)
-	if !ok {
-		return
-	}
-	httpStatus, ok := parseNonNegativeIntQuery(c, "http_status")
-	if !ok {
-		return
-	}
-	createdFrom, ok := parseTimeQuery(c, "created_from")
-	if !ok {
-		return
-	}
-	createdTo, ok := parseTimeQuery(c, "created_to")
-	if !ok {
-		return
-	}
-
-	var success *bool
-	if rawSuccess := strings.TrimSpace(c.Query("success")); rawSuccess != "" {
-		parsed, err := strconv.ParseBool(rawSuccess)
-		if err != nil {
-			writeBadRequest(c, "success must be true or false")
-			return
-		}
-		success = &parsed
-	}
-
-	items, err := h.store.ExportTenantRequestLogs(c.Request.Context(), id, entity.ListRequestLogsInput{
-		ModelPublicName: strings.TrimSpace(c.Query("model_public_name")),
-		Success:         success,
-		HTTPStatus:      httpStatus,
-		TraceID:         strings.TrimSpace(c.Query("trace_id")),
-		CreatedFrom:     createdFrom,
-		CreatedTo:       createdTo,
-	})
-	if err != nil {
-		writeDatabaseError(c, err)
-		return
-	}
-
-	buffer := bytes.NewBuffer(nil)
-	writer := csv.NewWriter(buffer)
-	_ = writer.Write([]string{
-		"id",
-		"trace_id",
-		"client_api_key_name",
-		"provider_name",
-		"provider_key_name",
-		"model_public_name",
-		"request_type",
-		"http_status",
-		"success",
-		"latency_ms",
-		"prompt_tokens",
-		"completion_tokens",
-		"total_tokens",
-		"reserved_amount",
-		"cost_amount",
-		"billable_amount",
-		"gross_profit",
-		"error_type",
-		"error_message",
-		"created_at",
-	})
-	for _, item := range items {
-		_ = writer.Write([]string{
-			strconv.FormatInt(item.ID, 10),
-			item.TraceID,
-			item.ClientAPIKeyName,
-			item.ProviderName,
-			item.ProviderKeyName,
-			item.ModelPublicName,
-			item.RequestType,
-			strconv.Itoa(item.HTTPStatus),
-			strconv.FormatBool(item.Success),
-			strconv.Itoa(item.LatencyMS),
-			strconv.Itoa(item.PromptTokens),
-			strconv.Itoa(item.CompletionTokens),
-			strconv.Itoa(item.TotalTokens),
-			strconv.FormatFloat(item.ReservedAmount, 'f', 8, 64),
-			strconv.FormatFloat(item.CostAmount, 'f', 8, 64),
-			strconv.FormatFloat(item.BillableAmount, 'f', 8, 64),
-			strconv.FormatFloat(item.BillableAmount-item.CostAmount, 'f', 8, 64),
-			item.ErrorType,
-			item.ErrorMessage,
-			item.CreatedAt.Format(time.RFC3339),
-		})
-	}
-	writer.Flush()
-	if err := writer.Error(); err != nil {
-		writeDatabaseError(c, err)
-		return
-	}
-
-	c.Header("Content-Type", "text/csv; charset=utf-8")
-	c.Header("Content-Disposition", `attachment; filename="tenant_billing.csv"`)
-	c.Data(http.StatusOK, "text/csv; charset=utf-8", buffer.Bytes())
-}
-
 func (h *Handler) GetLogDetail(c *gin.Context) {
 	if h.store == nil {
 		writeServiceUnavailable(c)
@@ -1349,24 +1192,6 @@ func (h *Handler) GetStats(c *gin.Context) {
 	stats.BudgetPressure = buildBudgetPressure(clientKeys, 5)
 
 	c.JSON(http.StatusOK, stats)
-}
-
-func (h *Handler) GetTenantBillingReconciliation(c *gin.Context) {
-	if h.store == nil {
-		writeServiceUnavailable(c)
-		return
-	}
-
-	items, err := h.store.GetTenantBillingReconciliation(c.Request.Context())
-	if err != nil {
-		writeDatabaseError(c, err)
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"items": items,
-		"total": len(items),
-	})
 }
 
 func (h *Handler) enrichClientKeyUsage(ctx context.Context, items []entity.ClientAPIKey) ([]entity.ClientAPIKey, error) {

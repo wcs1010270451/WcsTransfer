@@ -22,7 +22,7 @@ const { Header, Content, Sider } = Layout;
 const menuItems = [
   { key: "/dashboard", icon: <AppstoreOutlined />, label: "总览" },
   { key: "/providers", icon: <DatabaseOutlined />, label: "提供方" },
-  { key: "/tenants", icon: <TeamOutlined />, label: "租户" },
+  { key: "/users", icon: <TeamOutlined />, label: "用户" },
   { key: "/client-keys", icon: <ContactsOutlined />, label: "客户端密钥" },
   { key: "/keys", icon: <KeyOutlined />, label: "上游密钥" },
   { key: "/models", icon: <ApiOutlined />, label: "模型" },

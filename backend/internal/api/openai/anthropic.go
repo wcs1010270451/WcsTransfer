@@ -200,11 +200,11 @@ func (h *Handler) handleMessages(c *gin.Context, options chatCompletionOptions) 
 	if _, exists := payload["temperature"]; !exists && route.Model.Temperature > 0 {
 		payload["temperature"] = route.Model.Temperature
 	}
-	if clientKey, ok := middleware.ClientAPIKeyFromContext(c); ok && clientKey.TenantID > 0 {
+	if clientKey, ok := middleware.ClientAPIKeyFromContext(c); ok && clientKey.UserID > 0 {
 		requiredReserve := estimateAnthropicReserveAmount(payload, route.Model)
 		logState.reservedAmount = requiredReserve
 		logState.metadata["required_wallet_reserve"] = requiredReserve
-		if requiredReserve > 0 && clientKey.TenantWalletBalance < requiredReserve {
+		if requiredReserve > 0 && clientKey.UserWalletBalance < requiredReserve {
 			writeJSONError(
 				http.StatusPaymentRequired,
 				"wallet_reserve_insufficient",

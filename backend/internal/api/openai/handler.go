@@ -396,11 +396,11 @@ func (h *Handler) handleChatCompletions(c *gin.Context, options chatCompletionOp
 	if _, exists := payload["temperature"]; !exists {
 		payload["temperature"] = route.Model.Temperature
 	}
-	if clientKey, ok := middleware.ClientAPIKeyFromContext(c); ok && clientKey.TenantID > 0 {
+	if clientKey, ok := middleware.ClientAPIKeyFromContext(c); ok && clientKey.UserID > 0 {
 		requiredReserve := estimateChatReserveAmount(payload, route.Model)
 		logState.reservedAmount = requiredReserve
 		logState.metadata["required_wallet_reserve"] = requiredReserve
-		if requiredReserve > 0 && clientKey.TenantWalletBalance < requiredReserve {
+		if requiredReserve > 0 && clientKey.UserWalletBalance < requiredReserve {
 			writeJSONError(
 				http.StatusPaymentRequired,
 				"wallet_reserve_insufficient",
@@ -692,11 +692,11 @@ func (h *Handler) handleEmbeddings(c *gin.Context, options chatCompletionOptions
 	}
 
 	payload["model"] = route.Model.UpstreamModel
-	if clientKey, ok := middleware.ClientAPIKeyFromContext(c); ok && clientKey.TenantID > 0 {
+	if clientKey, ok := middleware.ClientAPIKeyFromContext(c); ok && clientKey.UserID > 0 {
 		requiredReserve := estimateEmbeddingsReserveAmount(payload, route.Model)
 		logState.reservedAmount = requiredReserve
 		logState.metadata["required_wallet_reserve"] = requiredReserve
-		if requiredReserve > 0 && clientKey.TenantWalletBalance < requiredReserve {
+		if requiredReserve > 0 && clientKey.UserWalletBalance < requiredReserve {
 			writeJSONError(
 				http.StatusPaymentRequired,
 				"wallet_reserve_insufficient",
@@ -1132,7 +1132,7 @@ func (h *Handler) writeRequestLog(ctx context.Context, startedAt time.Time, stat
 	}
 
 	if state.success && state.clientAPIKeyID > 0 && state.billableAmount > 0 {
-		_ = h.logWriter.DeductTenantWalletUsage(ctx, entity.TenantWalletUsageDebitInput{
+		_ = h.logWriter.DeductUserWalletUsage(ctx, entity.UserWalletUsageDebitInput{
 			ClientAPIKeyID:  state.clientAPIKeyID,
 			RequestLogID:    requestLogID,
 			TraceID:         state.traceID,

@@ -9,19 +9,19 @@ import (
 )
 
 type stubStore struct {
-	items []entity.TenantWalletBlockAnomaly
+	items []entity.UserWalletBlockAnomaly
 }
 
 type stubNotifier struct {
 	calls int
-	items []entity.TenantWalletBlockAnomaly
+	items []entity.UserWalletBlockAnomaly
 }
 
-func (s *stubStore) GetTenantWalletBlockAnomalies(context.Context, time.Time, int, int) ([]entity.TenantWalletBlockAnomaly, error) {
+func (s *stubStore) GetUserWalletBlockAnomalies(context.Context, time.Time, int, int) ([]entity.UserWalletBlockAnomaly, error) {
 	return s.items, nil
 }
 
-func (s *stubNotifier) SendTenantWalletBlockAnomaly(_ context.Context, item entity.TenantWalletBlockAnomaly, _ time.Duration) error {
+func (s *stubNotifier) SendUserWalletBlockAnomaly(_ context.Context, item entity.UserWalletBlockAnomaly, _ time.Duration) error {
 	s.calls++
 	s.items = append(s.items, item)
 	return nil
@@ -29,8 +29,8 @@ func (s *stubNotifier) SendTenantWalletBlockAnomaly(_ context.Context, item enti
 
 func TestRunOnceAlertsOnlyOnceUntilRecovered(t *testing.T) {
 	store := &stubStore{
-		items: []entity.TenantWalletBlockAnomaly{
-			{TenantID: 1, TenantName: "tenant-a", WalletBlockedCount: 10, IsWalletBlockedAnomalous: true},
+		items: []entity.UserWalletBlockAnomaly{
+			{UserID: 1, UserEmail: "user-a@test.com", WalletBlockedCount: 10, IsWalletBlockedAnomalous: true},
 		},
 	}
 	notifier := &stubNotifier{}
@@ -46,8 +46,8 @@ func TestRunOnceAlertsOnlyOnceUntilRecovered(t *testing.T) {
 	store.items = nil
 	service.runOnce(context.Background())
 
-	store.items = []entity.TenantWalletBlockAnomaly{
-		{TenantID: 1, TenantName: "tenant-a", ReserveBlockedCount: 8, IsReserveBlockedAnomalous: true},
+	store.items = []entity.UserWalletBlockAnomaly{
+		{UserID: 1, UserEmail: "user-a@test.com", ReserveBlockedCount: 8, IsReserveBlockedAnomalous: true},
 	}
 	service.runOnce(context.Background())
 

@@ -153,149 +153,46 @@ RETURNING id, name, slug, provider_type, base_url, status, description, extra_co
 	return item, nil
 }
 
-func (s *Store) ListTenants(ctx context.Context) ([]entity.Tenant, error) {
+func (s *Store) ListUsers(ctx context.Context) ([]entity.User, error) {
 	const query = `
-SELECT id, name, slug, status, max_client_keys, wallet_balance::float8, min_available_balance::float8, notes, created_at, updated_at
-FROM tenants
+SELECT id, email, full_name, status, wallet_balance::float8, min_available_balance::float8, last_login_at, created_at, updated_at
+FROM tenant_users
 ORDER BY id DESC`
 
 	rows, err := s.pool.Query(ctx, query)
 	if err != nil {
-		return nil, fmt.Errorf("query tenants: %w", err)
+		return nil, fmt.Errorf("query users: %w", err)
 	}
 	defer rows.Close()
 
-	items := make([]entity.Tenant, 0)
+	items := make([]entity.User, 0)
 	for rows.Next() {
-		var item entity.Tenant
-		if err := rows.Scan(&item.ID, &item.Name, &item.Slug, &item.Status, &item.MaxClientKeys, &item.WalletBalance, &item.MinAvailableBalance, &item.Notes, &item.CreatedAt, &item.UpdatedAt); err != nil {
-			return nil, fmt.Errorf("scan tenant: %w", err)
+		var item entity.User
+		if err := rows.Scan(&item.ID, &item.Email, &item.FullName, &item.Status, &item.WalletBalance, &item.MinAvailableBalance, &item.LastLoginAt, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan user: %w", err)
 		}
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate tenants: %w", err)
+		return nil, fmt.Errorf("iterate users: %w", err)
 	}
 	return items, nil
 }
 
-func (s *Store) CreateTenant(ctx context.Context, input entity.CreateTenantInput) (entity.Tenant, error) {
-	const query = `
-INSERT INTO tenants (name, slug, status, max_client_keys, min_available_balance, notes)
-VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, name, slug, status, max_client_keys, wallet_balance::float8, min_available_balance::float8, notes, created_at, updated_at`
-
-	var item entity.Tenant
-	err := s.pool.QueryRow(
-		ctx,
-		query,
-		input.Name,
-		input.Slug,
-		input.Status,
-		input.MaxClientKeys,
-		input.MinAvailableBalance,
-		input.Notes,
-	).Scan(
-		&item.ID,
-		&item.Name,
-		&item.Slug,
-		&item.Status,
-		&item.MaxClientKeys,
-		&item.WalletBalance,
-		&item.MinAvailableBalance,
-		&item.Notes,
-		&item.CreatedAt,
-		&item.UpdatedAt,
-	)
-	if err != nil {
-		return entity.Tenant{}, fmt.Errorf("insert tenant: %w", err)
-	}
-	return item, nil
-}
-
-func (s *Store) UpdateTenant(ctx context.Context, input entity.UpdateTenantInput) (entity.Tenant, error) {
-	const query = `
-UPDATE tenants
-SET name = $2,
-    slug = $3,
-    status = $4,
-    max_client_keys = $5,
-    min_available_balance = $6,
-    notes = $7
-WHERE id = $1
-RETURNING id, name, slug, status, max_client_keys, wallet_balance::float8, min_available_balance::float8, notes, created_at, updated_at`
-
-	var item entity.Tenant
-	err := s.pool.QueryRow(ctx, query, input.ID, input.Name, input.Slug, input.Status, input.MaxClientKeys, input.MinAvailableBalance, input.Notes).Scan(
-		&item.ID,
-		&item.Name,
-		&item.Slug,
-		&item.Status,
-		&item.MaxClientKeys,
-		&item.WalletBalance,
-		&item.MinAvailableBalance,
-		&item.Notes,
-		&item.CreatedAt,
-		&item.UpdatedAt,
-	)
-	if err != nil {
-		return entity.Tenant{}, fmt.Errorf("update tenant: %w", err)
-	}
-	return item, nil
-}
-
-func (s *Store) ListTenantUsers(ctx context.Context, tenantID int64) ([]entity.TenantUser, error) {
-	const query = `
-SELECT tu.id, tu.tenant_id, t.name, tu.email, tu.full_name, tu.status, tu.last_login_at, tu.created_at, tu.updated_at
-FROM tenant_users tu
-JOIN tenants t ON t.id = tu.tenant_id
-WHERE tu.tenant_id = $1
-ORDER BY tu.id DESC`
-
-	rows, err := s.pool.Query(ctx, query, tenantID)
-	if err != nil {
-		return nil, fmt.Errorf("query tenant users: %w", err)
-	}
-	defer rows.Close()
-
-	items := make([]entity.TenantUser, 0)
-	for rows.Next() {
-		var item entity.TenantUser
-		if err := rows.Scan(
-			&item.ID,
-			&item.TenantID,
-			&item.TenantName,
-			&item.Email,
-			&item.FullName,
-			&item.Status,
-			&item.LastLoginAt,
-			&item.CreatedAt,
-			&item.UpdatedAt,
-		); err != nil {
-			return nil, fmt.Errorf("scan tenant user: %w", err)
-		}
-		items = append(items, item)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate tenant users: %w", err)
-	}
-	return items, nil
-}
-
-func (s *Store) CreateTenantUser(ctx context.Context, input entity.CreateTenantUserInput) (entity.TenantUser, error) {
+func (s *Store) CreateUser(ctx context.Context, input entity.CreateUserInput) (entity.User, error) {
 	if strings.TrimSpace(input.Email) == "" {
-		return entity.TenantUser{}, fmt.Errorf("email is required")
+		return entity.User{}, fmt.Errorf("email is required")
 	}
 	if strings.TrimSpace(input.FullName) == "" {
-		return entity.TenantUser{}, fmt.Errorf("full name is required")
+		return entity.User{}, fmt.Errorf("full name is required")
 	}
 	if len(strings.TrimSpace(input.Password)) < 8 {
-		return entity.TenantUser{}, fmt.Errorf("password must be at least 8 characters")
+		return entity.User{}, fmt.Errorf("password must be at least 8 characters")
 	}
 
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(input.Password), bcrypt.DefaultCost)
 	if err != nil {
-		return entity.TenantUser{}, fmt.Errorf("hash tenant user password: %w", err)
+		return entity.User{}, fmt.Errorf("hash user password: %w", err)
 	}
 
 	status := strings.TrimSpace(input.Status)
@@ -303,92 +200,46 @@ func (s *Store) CreateTenantUser(ctx context.Context, input entity.CreateTenantU
 		status = "active"
 	}
 
-	const query = `
-INSERT INTO tenant_users (tenant_id, email, password_hash, full_name, status)
-SELECT t.id, $2, $3, $4, $5
-FROM tenants t
-WHERE t.id = $1
-RETURNING id, tenant_id, $6, email, full_name, status, last_login_at, created_at, updated_at`
-
-	var item entity.TenantUser
-	err = s.pool.QueryRow(
-		ctx,
-		query,
-		input.TenantID,
+	var item entity.User
+	err = s.pool.QueryRow(ctx, `
+INSERT INTO tenant_users (email, password_hash, full_name, status)
+VALUES ($1, $2, $3, $4)
+RETURNING id, email, full_name, status, wallet_balance::float8, min_available_balance::float8, last_login_at, created_at, updated_at`,
 		strings.ToLower(strings.TrimSpace(input.Email)),
 		string(passwordHash),
 		strings.TrimSpace(input.FullName),
 		status,
-		"",
-	).Scan(
-		&item.ID,
-		&item.TenantID,
-		&item.TenantName,
-		&item.Email,
-		&item.FullName,
-		&item.Status,
-		&item.LastLoginAt,
-		&item.CreatedAt,
-		&item.UpdatedAt,
-	)
+	).Scan(&item.ID, &item.Email, &item.FullName, &item.Status, &item.WalletBalance, &item.MinAvailableBalance, &item.LastLoginAt, &item.CreatedAt, &item.UpdatedAt)
 	if err != nil {
-		return entity.TenantUser{}, fmt.Errorf("insert tenant user: %w", err)
-	}
-
-	if tenant, tenantErr := s.GetTenantByID(ctx, input.TenantID); tenantErr == nil {
-		item.TenantName = tenant.Name
-	}
-
-	return item, nil
-}
-
-func (s *Store) UpdateTenantUserStatus(ctx context.Context, input entity.UpdateTenantUserStatusInput) (entity.TenantUser, error) {
-	const query = `
-UPDATE tenant_users tu
-SET status = $3
-FROM tenants t
-WHERE tu.id = $1
-  AND tu.tenant_id = $2
-  AND t.id = tu.tenant_id
-RETURNING tu.id, tu.tenant_id, t.name, tu.email, tu.full_name, tu.status, tu.last_login_at, tu.created_at, tu.updated_at`
-
-	var item entity.TenantUser
-	err := s.pool.QueryRow(ctx, query, input.UserID, input.TenantID, strings.TrimSpace(input.Status)).Scan(
-		&item.ID,
-		&item.TenantID,
-		&item.TenantName,
-		&item.Email,
-		&item.FullName,
-		&item.Status,
-		&item.LastLoginAt,
-		&item.CreatedAt,
-		&item.UpdatedAt,
-	)
-	if err != nil {
-		return entity.TenantUser{}, fmt.Errorf("update tenant user status: %w", err)
+		return entity.User{}, fmt.Errorf("insert user: %w", err)
 	}
 	return item, nil
 }
 
-func (s *Store) ResetTenantUserPassword(ctx context.Context, input entity.ResetTenantUserPasswordInput) error {
+func (s *Store) UpdateUserStatus(ctx context.Context, input entity.UpdateUserStatusInput) (entity.User, error) {
+	var item entity.User
+	err := s.pool.QueryRow(ctx, `
+UPDATE tenant_users SET status = $2 WHERE id = $1
+RETURNING id, email, full_name, status, wallet_balance::float8, min_available_balance::float8, last_login_at, created_at, updated_at`,
+		input.UserID, strings.TrimSpace(input.Status),
+	).Scan(&item.ID, &item.Email, &item.FullName, &item.Status, &item.WalletBalance, &item.MinAvailableBalance, &item.LastLoginAt, &item.CreatedAt, &item.UpdatedAt)
+	if err != nil {
+		return entity.User{}, fmt.Errorf("update user status: %w", err)
+	}
+	return item, nil
+}
+
+func (s *Store) ResetUserPassword(ctx context.Context, input entity.ResetUserPasswordInput) error {
 	if len(strings.TrimSpace(input.Password)) < 8 {
 		return fmt.Errorf("password must be at least 8 characters")
 	}
-
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(input.Password), bcrypt.DefaultCost)
 	if err != nil {
-		return fmt.Errorf("hash tenant user password: %w", err)
+		return fmt.Errorf("hash user password: %w", err)
 	}
-
-	tag, err := s.pool.Exec(
-		ctx,
-		`UPDATE tenant_users SET password_hash = $3 WHERE id = $1 AND tenant_id = $2`,
-		input.UserID,
-		input.TenantID,
-		string(passwordHash),
-	)
+	tag, err := s.pool.Exec(ctx, `UPDATE tenant_users SET password_hash = $2 WHERE id = $1`, input.UserID, string(passwordHash))
 	if err != nil {
-		return fmt.Errorf("reset tenant user password: %w", err)
+		return fmt.Errorf("reset user password: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return pgx.ErrNoRows
@@ -396,120 +247,82 @@ func (s *Store) ResetTenantUserPassword(ctx context.Context, input entity.ResetT
 	return nil
 }
 
-func (s *Store) AdjustTenantWallet(ctx context.Context, input entity.TenantWalletAdjustmentInput) (entity.Tenant, error) {
+func (s *Store) AdjustUserWallet(ctx context.Context, input entity.UserWalletAdjustmentInput) (entity.User, error) {
 	if input.Amount <= 0 {
-		return entity.Tenant{}, fmt.Errorf("amount must be greater than 0")
+		return entity.User{}, fmt.Errorf("amount must be greater than 0")
 	}
-
-	return s.applyTenantWalletAdminChange(ctx, input.TenantID, "credit", input.Amount, input.Note, input.OperatorID)
+	return s.applyUserWalletAdminChange(ctx, input.UserID, "credit", input.Amount, input.Note, input.OperatorID)
 }
 
-func (s *Store) CorrectTenantWallet(ctx context.Context, input entity.TenantWalletCorrectionInput) (entity.Tenant, error) {
+func (s *Store) CorrectUserWallet(ctx context.Context, input entity.UserWalletCorrectionInput) (entity.User, error) {
 	if input.Amount == 0 {
-		return entity.Tenant{}, fmt.Errorf("amount must not be zero")
+		return entity.User{}, fmt.Errorf("amount must not be zero")
 	}
 	if strings.TrimSpace(input.Note) == "" {
-		return entity.Tenant{}, fmt.Errorf("note is required")
+		return entity.User{}, fmt.Errorf("note is required")
 	}
-
 	direction := "credit"
 	amount := input.Amount
 	if amount < 0 {
 		direction = "debit"
 		amount = math.Abs(amount)
 	}
-
-	return s.applyTenantWalletAdminChange(ctx, input.TenantID, direction, amount, input.Note, input.OperatorID)
+	return s.applyUserWalletAdminChange(ctx, input.UserID, direction, amount, input.Note, input.OperatorID)
 }
 
-func (s *Store) applyTenantWalletAdminChange(ctx context.Context, tenantID int64, direction string, amount float64, note string, operatorID int64) (entity.Tenant, error) {
-	if amount <= 0 {
-		return entity.Tenant{}, fmt.Errorf("amount must be greater than 0")
-	}
-
+func (s *Store) applyUserWalletAdminChange(ctx context.Context, userID int64, direction string, amount float64, note string, operatorID int64) (entity.User, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return entity.Tenant{}, fmt.Errorf("begin adjust tenant wallet tx: %w", err)
+		return entity.User{}, fmt.Errorf("begin user wallet tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
-	var item entity.Tenant
+	var item entity.User
 	var before float64
 	err = tx.QueryRow(ctx, `
-SELECT id, name, slug, status, max_client_keys, wallet_balance::float8, min_available_balance::float8, notes, created_at, updated_at
-FROM tenants
-WHERE id = $1
-FOR UPDATE`, tenantID).Scan(
-		&item.ID,
-		&item.Name,
-		&item.Slug,
-		&item.Status,
-		&item.MaxClientKeys,
-		&before,
-		&item.MinAvailableBalance,
-		&item.Notes,
-		&item.CreatedAt,
-		&item.UpdatedAt,
+SELECT id, email, full_name, status, wallet_balance::float8, min_available_balance::float8, last_login_at, created_at, updated_at
+FROM tenant_users WHERE id = $1 FOR UPDATE`, userID).Scan(
+		&item.ID, &item.Email, &item.FullName, &item.Status, &before,
+		&item.MinAvailableBalance, &item.LastLoginAt, &item.CreatedAt, &item.UpdatedAt,
 	)
 	if err != nil {
-		return entity.Tenant{}, fmt.Errorf("load tenant wallet: %w", err)
+		return entity.User{}, fmt.Errorf("load user wallet: %w", err)
 	}
 
 	after := before
 	if direction == "debit" {
 		after -= amount
 		if after < 0 {
-			return entity.Tenant{}, fmt.Errorf("wallet balance cannot be negative after correction")
+			return entity.User{}, fmt.Errorf("wallet balance cannot be negative after correction")
 		}
 	} else {
 		after += amount
 	}
+
 	err = tx.QueryRow(ctx, `
-UPDATE tenants
-SET wallet_balance = $2
-WHERE id = $1
-RETURNING id, name, slug, status, max_client_keys, wallet_balance::float8, min_available_balance::float8, notes, created_at, updated_at`,
-		tenantID,
-		after,
-	).Scan(
-		&item.ID,
-		&item.Name,
-		&item.Slug,
-		&item.Status,
-		&item.MaxClientKeys,
-		&item.WalletBalance,
-		&item.MinAvailableBalance,
-		&item.Notes,
-		&item.CreatedAt,
-		&item.UpdatedAt,
-	)
+UPDATE tenant_users SET wallet_balance = $2 WHERE id = $1
+RETURNING id, email, full_name, status, wallet_balance::float8, min_available_balance::float8, last_login_at, created_at, updated_at`,
+		userID, after,
+	).Scan(&item.ID, &item.Email, &item.FullName, &item.Status, &item.WalletBalance, &item.MinAvailableBalance, &item.LastLoginAt, &item.CreatedAt, &item.UpdatedAt)
 	if err != nil {
-		return entity.Tenant{}, fmt.Errorf("update tenant wallet: %w", err)
+		return entity.User{}, fmt.Errorf("update user wallet: %w", err)
 	}
 
 	if _, err := tx.Exec(ctx, `
-INSERT INTO tenant_wallet_ledger (
-    tenant_id, direction, amount, balance_before, balance_after, note, operator_type, operator_user_id
-) VALUES ($1, $2, $3, $4, $5, $6, 'admin', NULLIF($7, 0))`,
-		tenantID,
-		direction,
-		amount,
-		before,
-		after,
-		note,
-		nullableInt64(operatorID),
+INSERT INTO tenant_wallet_ledger (user_id, direction, amount, balance_before, balance_after, note, operator_type, operator_user_id)
+VALUES ($1, $2, $3, $4, $5, $6, 'admin', NULLIF($7, 0))`,
+		userID, direction, amount, before, after, note, nullableInt64(operatorID),
 	); err != nil {
-		return entity.Tenant{}, fmt.Errorf("insert tenant wallet ledger: %w", err)
+		return entity.User{}, fmt.Errorf("insert user wallet ledger: %w", err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return entity.Tenant{}, fmt.Errorf("commit tenant wallet tx: %w", err)
+		return entity.User{}, fmt.Errorf("commit user wallet tx: %w", err)
 	}
-
 	return item, nil
 }
 
-func (s *Store) ListTenantWalletLedger(ctx context.Context, tenantID int64, page int, pageSize int) (entity.TenantWalletLedgerPage, error) {
+func (s *Store) ListUserWalletLedger(ctx context.Context, userID int64, page int, pageSize int) (entity.WalletLedgerPage, error) {
 	if page <= 0 {
 		page = 1
 	}
@@ -518,69 +331,46 @@ func (s *Store) ListTenantWalletLedger(ctx context.Context, tenantID int64, page
 	}
 
 	var total int64
-	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM tenant_wallet_ledger WHERE tenant_id = $1`, tenantID).Scan(&total); err != nil {
-		return entity.TenantWalletLedgerPage{}, fmt.Errorf("count tenant wallet ledger: %w", err)
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM tenant_wallet_ledger WHERE user_id = $1`, userID).Scan(&total); err != nil {
+		return entity.WalletLedgerPage{}, fmt.Errorf("count user wallet ledger: %w", err)
 	}
 
 	rows, err := s.pool.Query(ctx, `
-SELECT id, tenant_id, direction, amount::float8, balance_before::float8, balance_after::float8,
+SELECT id, user_id, direction, amount::float8, balance_before::float8, balance_after::float8,
        note, operator_type, COALESCE(operator_user_id, 0), COALESCE(request_log_id, 0), trace_id,
        model_public_name, total_tokens, reserved_amount::float8, cost_amount::float8, billable_amount::float8, created_at
 FROM tenant_wallet_ledger
-WHERE tenant_id = $1
+WHERE user_id = $1
 ORDER BY created_at DESC, id DESC
-LIMIT $2 OFFSET $3`,
-		tenantID,
-		pageSize,
-		(page-1)*pageSize,
-	)
+LIMIT $2 OFFSET $3`, userID, pageSize, (page-1)*pageSize)
 	if err != nil {
-		return entity.TenantWalletLedgerPage{}, fmt.Errorf("query tenant wallet ledger: %w", err)
+		return entity.WalletLedgerPage{}, fmt.Errorf("query user wallet ledger: %w", err)
 	}
 	defer rows.Close()
 
-	items := make([]entity.TenantWalletLedgerEntry, 0)
+	items := make([]entity.WalletLedgerEntry, 0)
 	for rows.Next() {
-		var item entity.TenantWalletLedgerEntry
+		var item entity.WalletLedgerEntry
 		if err := rows.Scan(
-			&item.ID,
-			&item.TenantID,
-			&item.Direction,
-			&item.Amount,
-			&item.BalanceBefore,
-			&item.BalanceAfter,
-			&item.Note,
-			&item.OperatorType,
-			&item.OperatorUserID,
-			&item.RequestLogID,
-			&item.TraceID,
-			&item.ModelPublicName,
-			&item.TotalTokens,
-			&item.ReservedAmount,
-			&item.CostAmount,
-			&item.BillableAmount,
-			&item.CreatedAt,
+			&item.ID, &item.UserID, &item.Direction, &item.Amount,
+			&item.BalanceBefore, &item.BalanceAfter, &item.Note, &item.OperatorType,
+			&item.OperatorUserID, &item.RequestLogID, &item.TraceID, &item.ModelPublicName,
+			&item.TotalTokens, &item.ReservedAmount, &item.CostAmount, &item.BillableAmount, &item.CreatedAt,
 		); err != nil {
-			return entity.TenantWalletLedgerPage{}, fmt.Errorf("scan tenant wallet ledger: %w", err)
+			return entity.WalletLedgerPage{}, fmt.Errorf("scan user wallet ledger: %w", err)
 		}
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
-		return entity.TenantWalletLedgerPage{}, fmt.Errorf("iterate tenant wallet ledger: %w", err)
+		return entity.WalletLedgerPage{}, fmt.Errorf("iterate user wallet ledger: %w", err)
 	}
-
-	return entity.TenantWalletLedgerPage{
-		Items:    items,
-		Total:    total,
-		Page:     page,
-		PageSize: pageSize,
-	}, nil
+	return entity.WalletLedgerPage{Items: items, Total: total, Page: page, PageSize: pageSize}, nil
 }
 
 func (s *Store) ListClientAPIKeys(ctx context.Context) ([]entity.ClientAPIKey, error) {
 	const query = `
 SELECT cak.id, cak.name, cak.masked_key, cak.status, cak.description,
-       COALESCE(cak.tenant_id, 0), COALESCE(t.name, ''), COALESCE(t.wallet_balance, 0)::float8, COALESCE(t.min_available_balance, 0)::float8,
+       COALESCE(cak.user_id, 0), COALESCE(tu.email, ''), COALESCE(tu.wallet_balance, 0)::float8, COALESCE(tu.min_available_balance, 0)::float8,
        cak.rpm_limit, cak.daily_request_limit, cak.daily_token_limit,
        cak.daily_cost_limit::float8, cak.monthly_cost_limit::float8, cak.warning_threshold::float8,
        COALESCE(model_access.allowed_model_ids, ARRAY[]::bigint[]),
@@ -589,7 +379,7 @@ SELECT cak.id, cak.name, cak.masked_key, cak.status, cak.description,
        COALESCE(monthly_usage.monthly_cost_used, 0)::float8,
        cak.expires_at, cak.last_used_at, cak.last_error_at, cak.last_error_message, cak.created_at, cak.updated_at
 FROM client_api_keys cak
-LEFT JOIN tenants t ON t.id = cak.tenant_id
+LEFT JOIN tenant_users tu ON tu.id = cak.user_id
 LEFT JOIN LATERAL (
     SELECT
         array_agg(cam.model_id ORDER BY cam.model_id) AS allowed_model_ids,
@@ -642,10 +432,10 @@ func (s *Store) CreateClientAPIKey(ctx context.Context, input entity.CreateClien
 
 	const query = `
 INSERT INTO client_api_keys (
-    tenant_id, created_by_user_id, name, key_hash, masked_key, status, description, rpm_limit, daily_request_limit, daily_token_limit,
+    user_id, name, key_hash, masked_key, status, description, rpm_limit, daily_request_limit, daily_token_limit,
     daily_cost_limit, monthly_cost_limit, warning_threshold, expires_at
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 RETURNING id`
 
 	tx, err := s.pool.Begin(ctx)
@@ -658,8 +448,7 @@ RETURNING id`
 	err = tx.QueryRow(
 		ctx,
 		query,
-		nullableInt64(input.TenantID),
-		nullableInt64(input.CreatedByUserID),
+		nullableInt64(input.UserID),
 		input.Name,
 		keyHash,
 		maskedKey,
@@ -697,16 +486,15 @@ func (s *Store) UpdateClientAPIKey(ctx context.Context, input entity.UpdateClien
 	const query = `
 UPDATE client_api_keys
 SET name = $2,
-    tenant_id = COALESCE($3, tenant_id),
-    status = $4,
-    description = $5,
-    rpm_limit = $6,
-    daily_request_limit = $7,
-    daily_token_limit = $8,
-    daily_cost_limit = $9,
-    monthly_cost_limit = $10,
-    warning_threshold = $11,
-    expires_at = $12
+    status = $3,
+    description = $4,
+    rpm_limit = $5,
+    daily_request_limit = $6,
+    daily_token_limit = $7,
+    daily_cost_limit = $8,
+    monthly_cost_limit = $9,
+    warning_threshold = $10,
+    expires_at = $11
 WHERE id = $1
 RETURNING id`
 
@@ -722,7 +510,6 @@ RETURNING id`
 		query,
 		input.ID,
 		input.Name,
-		nullableInt64(input.TenantID),
 		input.Status,
 		input.Description,
 		input.RPMLimit,
@@ -1240,12 +1027,12 @@ WITH updated_key AS (
     WHERE key_hash = $1
       AND status = 'active'
       AND (expires_at IS NULL OR expires_at > NOW())
-    RETURNING id, tenant_id, name, masked_key, status, description, rpm_limit, daily_request_limit, daily_token_limit,
+    RETURNING id, user_id, name, masked_key, status, description, rpm_limit, daily_request_limit, daily_token_limit,
               daily_cost_limit, monthly_cost_limit, warning_threshold,
               expires_at, last_used_at, last_error_at, last_error_message, created_at, updated_at
 )
 SELECT uk.id, uk.name, uk.masked_key, uk.status, uk.description,
-       COALESCE(uk.tenant_id, 0), COALESCE(t.name, ''), COALESCE(t.wallet_balance, 0)::float8, COALESCE(t.min_available_balance, 0)::float8,
+       COALESCE(uk.user_id, 0), COALESCE(tu.email, ''), COALESCE(tu.wallet_balance, 0)::float8, COALESCE(tu.min_available_balance, 0)::float8,
        uk.rpm_limit, uk.daily_request_limit, uk.daily_token_limit,
        uk.daily_cost_limit::float8, uk.monthly_cost_limit::float8, uk.warning_threshold::float8,
        COALESCE(model_access.allowed_model_ids, ARRAY[]::bigint[]),
@@ -1254,7 +1041,7 @@ SELECT uk.id, uk.name, uk.masked_key, uk.status, uk.description,
        COALESCE(monthly_usage.monthly_cost_used, 0)::float8,
        uk.expires_at, uk.last_used_at, uk.last_error_at, uk.last_error_message, uk.created_at, uk.updated_at
 FROM updated_key uk
-LEFT JOIN tenants t ON t.id = uk.tenant_id
+LEFT JOIN tenant_users tu ON tu.id = uk.user_id
 LEFT JOIN LATERAL (
     SELECT
         array_agg(cam.model_id ORDER BY cam.model_id) AS allowed_model_ids,
@@ -1275,7 +1062,7 @@ LEFT JOIN LATERAL (
     WHERE client_api_key_id = uk.id
       AND created_at >= date_trunc('month', NOW())
 ) monthly_usage ON TRUE
-WHERE uk.tenant_id IS NULL OR t.status = 'active'`
+WHERE uk.user_id IS NULL OR tu.status = 'active'`
 
 	item, err := scanClientAPIKey(s.pool.QueryRow(ctx, query, hashClientAPIKey(rawKey)))
 	if err != nil {
@@ -1283,86 +1070,6 @@ WHERE uk.tenant_id IS NULL OR t.status = 'active'`
 	}
 
 	return item, nil
-}
-
-func (s *Store) RegisterTenantUser(ctx context.Context, input entity.RegisterTenantUserInput) (entity.TenantUser, error) {
-	passwordHash, err := bcrypt.GenerateFromPassword([]byte(input.Password), bcrypt.DefaultCost)
-	if err != nil {
-		return entity.TenantUser{}, fmt.Errorf("hash tenant user password: %w", err)
-	}
-
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return entity.TenantUser{}, fmt.Errorf("begin register tenant user tx: %w", err)
-	}
-	defer tx.Rollback(ctx)
-
-	var tenantID int64
-	err = tx.QueryRow(
-		ctx,
-		`INSERT INTO tenants (name, slug, status, max_client_keys, min_available_balance, notes) VALUES ($1, $2, 'pending', 0, 0.01, '') RETURNING id`,
-		input.TenantName,
-		input.TenantSlug,
-	).Scan(&tenantID)
-	if err != nil {
-		return entity.TenantUser{}, fmt.Errorf("insert tenant: %w", err)
-	}
-
-	var user entity.TenantUser
-	err = tx.QueryRow(
-		ctx,
-		`INSERT INTO tenant_users (tenant_id, email, password_hash, full_name, status)
-		 VALUES ($1, $2, $3, $4, 'active')
-		 RETURNING id, tenant_id, email, full_name, status, last_login_at, created_at, updated_at`,
-		tenantID,
-		strings.ToLower(strings.TrimSpace(input.Email)),
-		string(passwordHash),
-		input.FullName,
-	).Scan(&user.ID, &user.TenantID, &user.Email, &user.FullName, &user.Status, &user.LastLoginAt, &user.CreatedAt, &user.UpdatedAt)
-	if err != nil {
-		return entity.TenantUser{}, fmt.Errorf("insert tenant user: %w", err)
-	}
-	user.TenantName = input.TenantName
-
-	if err := tx.Commit(ctx); err != nil {
-		return entity.TenantUser{}, fmt.Errorf("commit register tenant user tx: %w", err)
-	}
-
-	return user, nil
-}
-
-func (s *Store) AuthenticateTenantUser(ctx context.Context, email string, password string) (entity.TenantUser, error) {
-	const query = `
-SELECT tu.id, tu.tenant_id, t.name, tu.email, tu.full_name, tu.status, tu.password_hash, tu.last_login_at, tu.created_at, tu.updated_at
-FROM tenant_users tu
-JOIN tenants t ON t.id = tu.tenant_id
-WHERE tu.email = $1
-  AND tu.status = 'active'
-  AND t.status = 'active'`
-
-	var user entity.TenantUser
-	var passwordHash string
-	err := s.pool.QueryRow(ctx, query, strings.ToLower(strings.TrimSpace(email))).Scan(
-		&user.ID,
-		&user.TenantID,
-		&user.TenantName,
-		&user.Email,
-		&user.FullName,
-		&user.Status,
-		&passwordHash,
-		&user.LastLoginAt,
-		&user.CreatedAt,
-		&user.UpdatedAt,
-	)
-	if err != nil {
-		return entity.TenantUser{}, fmt.Errorf("authenticate tenant user: %w", err)
-	}
-
-	if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(password)); err != nil {
-		return entity.TenantUser{}, pgx.ErrNoRows
-	}
-
-	return user, nil
 }
 
 func (s *Store) AuthenticateAdminUser(ctx context.Context, username string, password string) (entity.AdminUser, error) {
@@ -1424,418 +1131,6 @@ WHERE id = $1
 	}
 
 	return user, nil
-}
-
-func (s *Store) UpdateTenantUserLastLogin(ctx context.Context, userID int64) error {
-	if _, err := s.pool.Exec(ctx, `UPDATE tenant_users SET last_login_at = NOW() WHERE id = $1`, userID); err != nil {
-		return fmt.Errorf("update tenant user last login: %w", err)
-	}
-	return nil
-}
-
-func (s *Store) GetTenantUserByID(ctx context.Context, userID int64) (entity.TenantUser, error) {
-	const query = `
-SELECT tu.id, tu.tenant_id, t.name, tu.email, tu.full_name, tu.status, tu.last_login_at, tu.created_at, tu.updated_at
-FROM tenant_users tu
-JOIN tenants t ON t.id = tu.tenant_id
-WHERE tu.id = $1
-  AND tu.status = 'active'
-  AND t.status = 'active'`
-
-	var user entity.TenantUser
-	err := s.pool.QueryRow(ctx, query, userID).Scan(
-		&user.ID,
-		&user.TenantID,
-		&user.TenantName,
-		&user.Email,
-		&user.FullName,
-		&user.Status,
-		&user.LastLoginAt,
-		&user.CreatedAt,
-		&user.UpdatedAt,
-	)
-	if err != nil {
-		return entity.TenantUser{}, fmt.Errorf("get tenant user by id: %w", err)
-	}
-	return user, nil
-}
-
-func (s *Store) GetTenantByID(ctx context.Context, tenantID int64) (entity.Tenant, error) {
-	const query = `
-SELECT id, name, slug, status, max_client_keys, wallet_balance::float8, min_available_balance::float8, notes, created_at, updated_at
-FROM tenants
-WHERE id = $1`
-
-	var item entity.Tenant
-	err := s.pool.QueryRow(ctx, query, tenantID).Scan(
-		&item.ID,
-		&item.Name,
-		&item.Slug,
-		&item.Status,
-		&item.MaxClientKeys,
-		&item.WalletBalance,
-		&item.MinAvailableBalance,
-		&item.Notes,
-		&item.CreatedAt,
-		&item.UpdatedAt,
-	)
-	if err != nil {
-		return entity.Tenant{}, fmt.Errorf("get tenant by id: %w", err)
-	}
-	return item, nil
-}
-
-func (s *Store) ListTenantClientAPIKeys(ctx context.Context, tenantID int64) ([]entity.ClientAPIKey, error) {
-	const query = `
-SELECT cak.id, cak.name, cak.masked_key, cak.status, cak.description,
-       COALESCE(cak.tenant_id, 0), COALESCE(t.name, ''), COALESCE(t.wallet_balance, 0)::float8, COALESCE(t.min_available_balance, 0)::float8,
-       cak.rpm_limit, cak.daily_request_limit, cak.daily_token_limit,
-       cak.daily_cost_limit::float8, cak.monthly_cost_limit::float8, cak.warning_threshold::float8,
-       COALESCE(model_access.allowed_model_ids, ARRAY[]::bigint[]),
-       COALESCE(model_access.allowed_models, ARRAY[]::text[]),
-       COALESCE(daily_usage.daily_cost_used, 0)::float8,
-       COALESCE(monthly_usage.monthly_cost_used, 0)::float8,
-       cak.expires_at, cak.last_used_at, cak.last_error_at, cak.last_error_message, cak.created_at, cak.updated_at
-FROM client_api_keys cak
-JOIN tenants t ON t.id = cak.tenant_id
-LEFT JOIN LATERAL (
-    SELECT
-        array_agg(cam.model_id ORDER BY cam.model_id) AS allowed_model_ids,
-        array_agg(m.public_name ORDER BY m.public_name) AS allowed_models
-    FROM client_api_key_models cam
-    JOIN models m ON m.id = cam.model_id
-    WHERE cam.client_api_key_id = cak.id
-) model_access ON TRUE
-LEFT JOIN LATERAL (
-    SELECT COALESCE(SUM(billable_amount), 0) AS daily_cost_used
-    FROM request_logs
-    WHERE client_api_key_id = cak.id
-      AND created_at >= date_trunc('day', NOW())
-) daily_usage ON TRUE
-LEFT JOIN LATERAL (
-    SELECT COALESCE(SUM(billable_amount), 0) AS monthly_cost_used
-    FROM request_logs
-    WHERE client_api_key_id = cak.id
-      AND created_at >= date_trunc('month', NOW())
-) monthly_usage ON TRUE
-WHERE cak.tenant_id = $1
-ORDER BY cak.id DESC`
-
-	rows, err := s.pool.Query(ctx, query, tenantID)
-	if err != nil {
-		return nil, fmt.Errorf("query tenant client api keys: %w", err)
-	}
-	defer rows.Close()
-
-	items := make([]entity.ClientAPIKey, 0)
-	for rows.Next() {
-		item, err := scanClientAPIKey(rows)
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, item)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate tenant client api keys: %w", err)
-	}
-	return items, nil
-}
-
-func (s *Store) GetTenantPortalStats(ctx context.Context, tenantID int64) (entity.TenantPortalStats, error) {
-	const query = `
-WITH request_stats AS (
-    SELECT
-        COUNT(*)::bigint AS request_count,
-        COUNT(*) FILTER (WHERE rl.success)::bigint AS success_count,
-        COUNT(*) FILTER (WHERE NOT rl.success)::bigint AS failed_count,
-        COALESCE(AVG(rl.latency_ms), 0)::float8 AS average_latency_ms,
-        COALESCE(SUM(rl.prompt_tokens), 0)::bigint AS prompt_tokens,
-        COALESCE(SUM(rl.completion_tokens), 0)::bigint AS completion_tokens,
-        COALESCE(SUM(rl.total_tokens), 0)::bigint AS total_tokens,
-        COALESCE(SUM(rl.cost_amount), 0)::float8 AS cost_amount,
-        COALESCE(SUM(rl.billable_amount), 0)::float8 AS billable_amount
-    FROM request_logs rl
-    JOIN client_api_keys cak ON cak.id = rl.client_api_key_id
-    WHERE cak.tenant_id = $1
-),
-today_billing AS (
-    SELECT
-        COALESCE(SUM(rl.cost_amount), 0)::float8 AS cost_amount,
-        COALESCE(SUM(rl.billable_amount), 0)::float8 AS billable_amount
-    FROM request_logs rl
-    JOIN client_api_keys cak ON cak.id = rl.client_api_key_id
-    WHERE cak.tenant_id = $1
-      AND rl.created_at >= date_trunc('day', NOW())
-),
-month_billing AS (
-    SELECT
-        COALESCE(SUM(rl.cost_amount), 0)::float8 AS cost_amount,
-        COALESCE(SUM(rl.billable_amount), 0)::float8 AS billable_amount
-    FROM request_logs rl
-    JOIN client_api_keys cak ON cak.id = rl.client_api_key_id
-    WHERE cak.tenant_id = $1
-      AND rl.created_at >= date_trunc('month', NOW())
-),
-key_stats AS (
-    SELECT
-        COUNT(*)::bigint AS client_key_count,
-        COUNT(*) FILTER (WHERE status = 'active')::bigint AS active_client_keys
-    FROM client_api_keys
-    WHERE tenant_id = $1
-)
-SELECT
-    rs.request_count,
-    rs.success_count,
-    rs.failed_count,
-    rs.average_latency_ms,
-    rs.prompt_tokens,
-    rs.completion_tokens,
-    rs.total_tokens,
-    rs.cost_amount,
-    rs.billable_amount,
-    tb.cost_amount,
-    tb.billable_amount,
-    mb.cost_amount,
-    mb.billable_amount,
-    ks.client_key_count,
-    ks.active_client_keys
-FROM request_stats rs
-CROSS JOIN today_billing tb
-CROSS JOIN month_billing mb
-CROSS JOIN key_stats ks`
-
-	var stats entity.TenantPortalStats
-	if err := s.pool.QueryRow(ctx, query, tenantID).Scan(
-		&stats.RequestCount,
-		&stats.SuccessCount,
-		&stats.FailedCount,
-		&stats.AverageLatencyMS,
-		&stats.PromptTokens,
-		&stats.CompletionTokens,
-		&stats.TotalTokens,
-		&stats.CostAmount,
-		&stats.BillableAmount,
-		&stats.TodayCostAmount,
-		&stats.TodayBillable,
-		&stats.MonthCostAmount,
-		&stats.MonthBillable,
-		&stats.ClientKeyCount,
-		&stats.ActiveClientKeys,
-	); err != nil {
-		return entity.TenantPortalStats{}, fmt.Errorf("query tenant portal stats: %w", err)
-	}
-	if stats.RequestCount > 0 {
-		stats.SuccessRate = float64(stats.SuccessCount) * 100 / float64(stats.RequestCount)
-	}
-	stats.GrossProfit = stats.BillableAmount - stats.CostAmount
-	stats.TodayGrossProfit = stats.TodayBillable - stats.TodayCostAmount
-	stats.MonthGrossProfit = stats.MonthBillable - stats.MonthCostAmount
-	return stats, nil
-}
-
-func (s *Store) ListTenantModels(ctx context.Context, tenantID int64) ([]entity.Model, error) {
-	const unrestrictedQuery = `
-SELECT EXISTS (
-    SELECT 1
-    FROM client_api_keys cak
-    WHERE cak.tenant_id = $1
-      AND cak.status = 'active'
-      AND NOT EXISTS (
-          SELECT 1
-          FROM client_api_key_models cam
-          WHERE cam.client_api_key_id = cak.id
-      )
-)`
-
-	var hasUnrestricted bool
-	if err := s.pool.QueryRow(ctx, unrestrictedQuery, tenantID).Scan(&hasUnrestricted); err != nil {
-		return nil, fmt.Errorf("check tenant unrestricted models: %w", err)
-	}
-
-	query := `
-SELECT m.id, m.public_name, m.provider_id, p.name, m.upstream_model, m.route_strategy, m.is_enabled,
-       m.max_tokens, m.temperature::float8, m.timeout_seconds,
-       m.cost_input_per_1m::float8, m.cost_output_per_1m::float8, m.sale_input_per_1m::float8, m.sale_output_per_1m::float8,
-       m.reserve_multiplier::float8, m.reserve_min_amount::float8,
-       m.metadata, m.created_at, m.updated_at
-FROM models m
-JOIN providers p ON p.id = m.provider_id
-WHERE m.is_enabled = TRUE
-  AND p.status = 'active'`
-	args := []any{}
-
-	if !hasUnrestricted {
-		query += `
-  AND (
-      NOT EXISTS (
-          SELECT 1
-          FROM client_api_keys cak_exists
-          WHERE cak_exists.tenant_id = $1
-            AND cak_exists.status = 'active'
-      )
-      OR EXISTS (
-          SELECT 1
-          FROM client_api_keys cak
-          JOIN client_api_key_models cam ON cam.client_api_key_id = cak.id
-          WHERE cak.tenant_id = $1
-            AND cak.status = 'active'
-            AND cam.model_id = m.id
-      )
-  )`
-		args = append(args, tenantID)
-	}
-
-	query += `
-ORDER BY m.public_name ASC`
-
-	rows, err := s.pool.Query(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("query tenant models: %w", err)
-	}
-	defer rows.Close()
-
-	items := make([]entity.Model, 0)
-	for rows.Next() {
-		var item entity.Model
-		var rawMetadata []byte
-		if err := rows.Scan(
-			&item.ID,
-			&item.PublicName,
-			&item.ProviderID,
-			&item.ProviderName,
-			&item.UpstreamModel,
-			&item.RouteStrategy,
-			&item.IsEnabled,
-			&item.MaxTokens,
-			&item.Temperature,
-			&item.TimeoutSeconds,
-			&item.CostInputPer1M,
-			&item.CostOutputPer1M,
-			&item.SaleInputPer1M,
-			&item.SaleOutputPer1M,
-			&item.ReserveMultiplier,
-			&item.ReserveMinAmount,
-			&rawMetadata,
-			&item.CreatedAt,
-			&item.UpdatedAt,
-		); err != nil {
-			return nil, fmt.Errorf("scan tenant model: %w", err)
-		}
-		item.Metadata = rawMetadata
-		items = append(items, item)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate tenant models: %w", err)
-	}
-
-	return items, nil
-}
-
-func (s *Store) ListTenantRequestLogs(ctx context.Context, tenantID int64, input entity.ListRequestLogsInput) (entity.RequestLogPage, error) {
-	input.TenantID = tenantID
-	return s.ListRequestLogs(ctx, input)
-}
-
-func (s *Store) ExportTenantRequestLogs(ctx context.Context, tenantID int64, input entity.ListRequestLogsInput) ([]entity.RequestLog, error) {
-	input.TenantID = tenantID
-	return s.ExportRequestLogs(ctx, input)
-}
-
-func (s *Store) GetTenantRequestLog(ctx context.Context, tenantID int64, id int64) (entity.RequestLogDetail, error) {
-	const query = `
-SELECT rl.id, rl.trace_id, rl.request_type, rl.model_public_name, rl.upstream_model,
-       COALESCE(rl.provider_id, 0), COALESCE(p.name, ''), COALESCE(rl.provider_key_id, 0), COALESCE(pk.name, ''),
-       COALESCE(rl.client_api_key_id, 0), COALESCE(cak.name, ''),
-       COALESCE(HOST(rl.client_ip), ''), rl.request_method, rl.request_path, rl.http_status, rl.success, rl.latency_ms,
-       rl.prompt_tokens, rl.completion_tokens, rl.total_tokens, rl.reserved_amount::float8, rl.cost_amount::float8, rl.billable_amount::float8, rl.error_type, rl.error_message,
-       rl.created_at, rl.request_payload, rl.response_payload, rl.metadata
-FROM request_logs rl
-LEFT JOIN providers p ON p.id = rl.provider_id
-LEFT JOIN provider_keys pk ON pk.id = rl.provider_key_id
-LEFT JOIN client_api_keys cak ON cak.id = rl.client_api_key_id
-WHERE rl.id = $1
-  AND EXISTS (
-      SELECT 1
-      FROM client_api_keys cak_filter
-      WHERE cak_filter.id = rl.client_api_key_id
-        AND cak_filter.tenant_id = $2
-  )`
-
-	var item entity.RequestLogDetail
-	err := s.pool.QueryRow(ctx, query, id, tenantID).Scan(
-		&item.ID,
-		&item.TraceID,
-		&item.RequestType,
-		&item.ModelPublicName,
-		&item.UpstreamModel,
-		&item.ProviderID,
-		&item.ProviderName,
-		&item.ProviderKeyID,
-		&item.ProviderKeyName,
-		&item.ClientAPIKeyID,
-		&item.ClientAPIKeyName,
-		&item.ClientIP,
-		&item.RequestMethod,
-		&item.RequestPath,
-		&item.HTTPStatus,
-		&item.Success,
-		&item.LatencyMS,
-		&item.PromptTokens,
-		&item.CompletionTokens,
-		&item.TotalTokens,
-		&item.ReservedAmount,
-		&item.CostAmount,
-		&item.BillableAmount,
-		&item.ErrorType,
-		&item.ErrorMessage,
-		&item.CreatedAt,
-		&item.RequestPayload,
-		&item.ResponsePayload,
-		&item.Metadata,
-	)
-	if err != nil {
-		return entity.RequestLogDetail{}, fmt.Errorf("query tenant request log: %w", err)
-	}
-	return item, nil
-}
-
-func (s *Store) CreateTenantClientAPIKey(ctx context.Context, input entity.CreateClientAPIKeyInput) (entity.ClientAPIKey, error) {
-	tenant, err := s.GetTenantByID(ctx, input.TenantID)
-	if err != nil {
-		return entity.ClientAPIKey{}, err
-	}
-	if tenant.Status != "active" {
-		return entity.ClientAPIKey{}, fmt.Errorf("tenant is not active yet")
-	}
-	if tenant.MaxClientKeys <= 0 {
-		return entity.ClientAPIKey{}, fmt.Errorf("tenant is not allowed to create client keys yet")
-	}
-
-	var existingCount int
-	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM client_api_keys WHERE tenant_id = $1`, input.TenantID).Scan(&existingCount); err != nil {
-		return entity.ClientAPIKey{}, fmt.Errorf("count tenant client keys: %w", err)
-	}
-	if existingCount >= tenant.MaxClientKeys {
-		return entity.ClientAPIKey{}, fmt.Errorf("tenant client key limit reached")
-	}
-
-	return s.CreateClientAPIKey(ctx, input)
-}
-
-func (s *Store) DisableTenantClientAPIKey(ctx context.Context, tenantID int64, id int64) (entity.ClientAPIKey, error) {
-	const query = `
-UPDATE client_api_keys
-SET status = 'disabled'
-WHERE id = $1
-  AND tenant_id = $2
-RETURNING id`
-
-	var clientKeyID int64
-	if err := s.pool.QueryRow(ctx, query, id, tenantID).Scan(&clientKeyID); err != nil {
-		return entity.ClientAPIKey{}, fmt.Errorf("disable tenant client api key: %w", err)
-	}
-
-	return s.getClientAPIKeyByID(ctx, clientKeyID)
 }
 
 func (s *Store) ListRequestLogs(ctx context.Context, input entity.ListRequestLogsInput) (entity.RequestLogPage, error) {
@@ -2244,74 +1539,6 @@ LIMIT 5`
 	return stats, nil
 }
 
-func (s *Store) GetTenantBillingReconciliation(ctx context.Context) ([]entity.TenantBillingReconciliation, error) {
-	const query = `
-WITH ledger AS (
-    SELECT
-        tenant_id,
-        COALESCE(SUM(CASE WHEN direction = 'credit' THEN amount ELSE 0 END), 0)::float8 AS ledger_credit_amount,
-        COALESCE(SUM(CASE WHEN direction = 'debit' THEN amount ELSE 0 END), 0)::float8 AS ledger_debit_amount
-    FROM tenant_wallet_ledger
-    GROUP BY tenant_id
-),
-logs AS (
-    SELECT
-        cak.tenant_id,
-        COALESCE(SUM(rl.billable_amount), 0)::float8 AS log_billable_amount,
-        COALESCE(SUM(rl.cost_amount), 0)::float8 AS log_cost_amount
-    FROM request_logs rl
-    JOIN client_api_keys cak ON cak.id = rl.client_api_key_id
-    GROUP BY cak.tenant_id
-)
-SELECT
-    t.id,
-    t.name,
-    t.wallet_balance::float8,
-    COALESCE(l.ledger_credit_amount, 0)::float8,
-    COALESCE(l.ledger_debit_amount, 0)::float8,
-    (COALESCE(l.ledger_credit_amount, 0) - COALESCE(l.ledger_debit_amount, 0))::float8 AS ledger_net_amount,
-    COALESCE(g.log_billable_amount, 0)::float8,
-    COALESCE(g.log_cost_amount, 0)::float8
-FROM tenants t
-LEFT JOIN ledger l ON l.tenant_id = t.id
-LEFT JOIN logs g ON g.tenant_id = t.id
-ORDER BY t.id DESC`
-
-	rows, err := s.pool.Query(ctx, query)
-	if err != nil {
-		return nil, fmt.Errorf("query tenant billing reconciliation: %w", err)
-	}
-	defer rows.Close()
-
-	items := make([]entity.TenantBillingReconciliation, 0)
-	for rows.Next() {
-		var item entity.TenantBillingReconciliation
-		if err := rows.Scan(
-			&item.TenantID,
-			&item.TenantName,
-			&item.WalletBalance,
-			&item.LedgerCreditAmount,
-			&item.LedgerDebitAmount,
-			&item.LedgerNetAmount,
-			&item.LogBillableAmount,
-			&item.LogCostAmount,
-		); err != nil {
-			return nil, fmt.Errorf("scan tenant billing reconciliation: %w", err)
-		}
-
-		item.WalletVsLedgerDiff = roundCurrency(item.WalletBalance - item.LedgerNetAmount)
-		item.LedgerVsLogsDiff = roundCurrency(item.LedgerDebitAmount - item.LogBillableAmount)
-		item.IsWalletBalanced = isCurrencyZero(item.WalletVsLedgerDiff)
-		item.IsBillingBalanced = isCurrencyZero(item.LedgerVsLogsDiff)
-		items = append(items, item)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate tenant billing reconciliation: %w", err)
-	}
-
-	return items, nil
-}
-
 func (s *Store) GetProviderRequestAnomalies(ctx context.Context, since time.Time, minRequests int, rateLimitedThreshold float64, serverErrorThreshold float64) ([]entity.ProviderRequestAnomaly, error) {
 	const query = `
 SELECT
@@ -2359,101 +1586,6 @@ ORDER BY total_requests DESC, provider_name ASC`
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate provider request anomalies: %w", err)
-	}
-
-	return items, nil
-}
-
-func (s *Store) GetTenantWalletBlockAnomalies(ctx context.Context, since time.Time, walletBlockThreshold int, reserveBlockThreshold int) ([]entity.TenantWalletBlockAnomaly, error) {
-	const query = `
-SELECT
-    t.id,
-    t.name,
-    COUNT(*) FILTER (WHERE rl.error_type IN ('wallet_empty', 'wallet_below_minimum'))::bigint AS wallet_blocked_count,
-    COUNT(*) FILTER (WHERE rl.error_type = 'wallet_reserve_insufficient')::bigint AS reserve_blocked_count
-FROM request_logs rl
-JOIN client_api_keys cak ON cak.id = rl.client_api_key_id
-JOIN tenants t ON t.id = cak.tenant_id
-WHERE rl.created_at >= $1
-  AND rl.error_type IN ('wallet_empty', 'wallet_below_minimum', 'wallet_reserve_insufficient')
-GROUP BY t.id, t.name
-ORDER BY t.id DESC`
-
-	rows, err := s.pool.Query(ctx, query, since)
-	if err != nil {
-		return nil, fmt.Errorf("query tenant wallet block anomalies: %w", err)
-	}
-	defer rows.Close()
-
-	items := make([]entity.TenantWalletBlockAnomaly, 0)
-	for rows.Next() {
-		var item entity.TenantWalletBlockAnomaly
-		if err := rows.Scan(
-			&item.TenantID,
-			&item.TenantName,
-			&item.WalletBlockedCount,
-			&item.ReserveBlockedCount,
-		); err != nil {
-			return nil, fmt.Errorf("scan tenant wallet block anomaly: %w", err)
-		}
-		item.IsWalletBlockedAnomalous = item.WalletBlockedCount >= int64(walletBlockThreshold)
-		item.IsReserveBlockedAnomalous = item.ReserveBlockedCount >= int64(reserveBlockThreshold)
-		if item.IsWalletBlockedAnomalous || item.IsReserveBlockedAnomalous {
-			items = append(items, item)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate tenant wallet block anomalies: %w", err)
-	}
-
-	return items, nil
-}
-
-func (s *Store) GetTenantBillingDebitAnomalies(ctx context.Context, since time.Time, minCount int, minBillableAmount float64) ([]entity.TenantBillingDebitAnomaly, error) {
-	const query = `
-SELECT
-    t.id,
-    t.name,
-    COUNT(*)::bigint AS missing_debit_count,
-    COALESCE(SUM(rl.billable_amount), 0)::float8 AS missing_billable_amount,
-    COALESCE(SUM(rl.cost_amount), 0)::float8 AS missing_cost_amount
-FROM request_logs rl
-JOIN client_api_keys cak ON cak.id = rl.client_api_key_id
-JOIN tenants t ON t.id = cak.tenant_id
-LEFT JOIN tenant_wallet_ledger twl ON twl.request_log_id = rl.id AND twl.direction = 'debit'
-WHERE rl.created_at >= $1
-  AND rl.success = TRUE
-  AND rl.billable_amount > 0
-  AND twl.id IS NULL
-GROUP BY t.id, t.name
-ORDER BY missing_billable_amount DESC, missing_debit_count DESC, t.id ASC`
-
-	rows, err := s.pool.Query(ctx, query, since)
-	if err != nil {
-		return nil, fmt.Errorf("query tenant billing debit anomalies: %w", err)
-	}
-	defer rows.Close()
-
-	items := make([]entity.TenantBillingDebitAnomaly, 0)
-	for rows.Next() {
-		var item entity.TenantBillingDebitAnomaly
-		if err := rows.Scan(
-			&item.TenantID,
-			&item.TenantName,
-			&item.MissingDebitCount,
-			&item.MissingBillableAmount,
-			&item.MissingCostAmount,
-		); err != nil {
-			return nil, fmt.Errorf("scan tenant billing debit anomaly: %w", err)
-		}
-		item.IsCountAnomalous = item.MissingDebitCount >= int64(minCount)
-		item.IsBillableAmountAnomalous = item.MissingBillableAmount >= minBillableAmount
-		if item.IsCountAnomalous || item.IsBillableAmountAnomalous {
-			items = append(items, item)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate tenant billing debit anomalies: %w", err)
 	}
 
 	return items, nil
@@ -2539,69 +1671,6 @@ INSERT INTO request_logs (
 	return id, nil
 }
 
-func (s *Store) DeductTenantWalletUsage(ctx context.Context, input entity.TenantWalletUsageDebitInput) error {
-	if input.ClientAPIKeyID <= 0 || input.BillableAmount <= 0 {
-		return nil
-	}
-
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("begin deduct tenant wallet tx: %w", err)
-	}
-	defer tx.Rollback(ctx)
-
-	var tenantID int64
-	var before float64
-	err = tx.QueryRow(ctx, `
-SELECT t.id, t.wallet_balance::float8
-FROM client_api_keys cak
-JOIN tenants t ON t.id = cak.tenant_id
-WHERE cak.id = $1
-FOR UPDATE`, input.ClientAPIKeyID).Scan(&tenantID, &before)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil
-		}
-		return fmt.Errorf("load tenant wallet for debit: %w", err)
-	}
-
-	after := before - input.BillableAmount
-	if after < 0 {
-		after = 0
-	}
-
-	if _, err := tx.Exec(ctx, `UPDATE tenants SET wallet_balance = $2 WHERE id = $1`, tenantID, after); err != nil {
-		return fmt.Errorf("update tenant wallet debit: %w", err)
-	}
-
-	if _, err := tx.Exec(ctx, `
-INSERT INTO tenant_wallet_ledger (
-    tenant_id, direction, amount, balance_before, balance_after, note, operator_type,
-    request_log_id, trace_id, model_public_name, total_tokens, reserved_amount, cost_amount, billable_amount
-) VALUES ($1, 'debit', $2, $3, $4, $5, 'system', NULLIF($6, 0), $7, $8, $9, $10, $11, $12)`,
-		tenantID,
-		input.BillableAmount,
-		before,
-		after,
-		input.Note,
-		input.RequestLogID,
-		input.TraceID,
-		input.ModelPublicName,
-		input.TotalTokens,
-		input.ReservedAmount,
-		input.CostAmount,
-		input.BillableAmount,
-	); err != nil {
-		return fmt.Errorf("insert debit wallet ledger: %w", err)
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit deduct tenant wallet tx: %w", err)
-	}
-
-	return nil
-}
-
 func normalizeJSON(input []byte) json.RawMessage {
 	trimmed := strings.TrimSpace(string(input))
 	if trimmed == "" {
@@ -2659,10 +1728,10 @@ func scanClientAPIKey(scanner interface {
 		&item.MaskedKey,
 		&item.Status,
 		&item.Description,
-		&item.TenantID,
-		&item.TenantName,
-		&item.TenantWalletBalance,
-		&item.TenantMinAvailableBalance,
+		&item.UserID,
+		&item.UserEmail,
+		&item.UserWalletBalance,
+		&item.UserMinAvailBalance,
 		&item.RPMLimit,
 		&item.DailyRequestLimit,
 		&item.DailyTokenLimit,
@@ -2690,7 +1759,7 @@ func scanClientAPIKey(scanner interface {
 func (s *Store) getClientAPIKeyByID(ctx context.Context, id int64) (entity.ClientAPIKey, error) {
 	const query = `
 SELECT cak.id, cak.name, cak.masked_key, cak.status, cak.description,
-       COALESCE(cak.tenant_id, 0), COALESCE(t.name, ''), COALESCE(t.wallet_balance, 0)::float8, COALESCE(t.min_available_balance, 0)::float8,
+       COALESCE(cak.user_id, 0), COALESCE(tu.email, ''), COALESCE(tu.wallet_balance, 0)::float8, COALESCE(tu.min_available_balance, 0)::float8,
        cak.rpm_limit, cak.daily_request_limit, cak.daily_token_limit,
        cak.daily_cost_limit::float8, cak.monthly_cost_limit::float8, cak.warning_threshold::float8,
        COALESCE(model_access.allowed_model_ids, ARRAY[]::bigint[]),
@@ -2699,7 +1768,7 @@ SELECT cak.id, cak.name, cak.masked_key, cak.status, cak.description,
        COALESCE(monthly_usage.monthly_cost_used, 0)::float8,
        cak.expires_at, cak.last_used_at, cak.last_error_at, cak.last_error_message, cak.created_at, cak.updated_at
 FROM client_api_keys cak
-LEFT JOIN tenants t ON t.id = cak.tenant_id
+LEFT JOIN tenant_users tu ON tu.id = cak.user_id
 LEFT JOIN LATERAL (
     SELECT
         array_agg(cam.model_id ORDER BY cam.model_id) AS allowed_model_ids,
@@ -2896,8 +1965,8 @@ func buildRequestLogFilters(input entity.ListRequestLogsInput) (string, []any) {
 		return "$" + strconv.Itoa(len(args))
 	}
 
-	if input.TenantID > 0 {
-		clauses = append(clauses, "EXISTS (SELECT 1 FROM client_api_keys cak_filter WHERE cak_filter.id = rl.client_api_key_id AND cak_filter.tenant_id = "+nextArg(input.TenantID)+")")
+	if input.UserID > 0 {
+		clauses = append(clauses, "EXISTS (SELECT 1 FROM client_api_keys cak_filter WHERE cak_filter.id = rl.client_api_key_id AND cak_filter.user_id = "+nextArg(input.UserID)+")")
 	}
 	if input.ProviderID > 0 {
 		clauses = append(clauses, "rl.provider_id = "+nextArg(input.ProviderID))
@@ -2978,4 +2047,428 @@ func roundCurrency(value float64) float64 {
 
 func isCurrencyZero(value float64) bool {
 	return math.Abs(value) < 0.0001
+}
+
+// --- UserAuthStore ---
+
+func (s *Store) AuthenticateUser(ctx context.Context, email string, password string) (entity.User, error) {
+	const query = `
+SELECT id, email, full_name, status, wallet_balance::float8, min_available_balance::float8, password_hash, last_login_at, created_at, updated_at
+FROM tenant_users
+WHERE email = $1
+  AND status = 'active'`
+
+	var item entity.User
+	var passwordHash string
+	err := s.pool.QueryRow(ctx, query, strings.ToLower(strings.TrimSpace(email))).Scan(
+		&item.ID, &item.Email, &item.FullName, &item.Status,
+		&item.WalletBalance, &item.MinAvailableBalance,
+		&passwordHash, &item.LastLoginAt, &item.CreatedAt, &item.UpdatedAt,
+	)
+	if err != nil {
+		return entity.User{}, fmt.Errorf("authenticate user: %w", err)
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(password)); err != nil {
+		return entity.User{}, pgx.ErrNoRows
+	}
+	return item, nil
+}
+
+func (s *Store) UpdateUserLastLogin(ctx context.Context, userID int64) error {
+	if _, err := s.pool.Exec(ctx, `UPDATE tenant_users SET last_login_at = NOW() WHERE id = $1`, userID); err != nil {
+		return fmt.Errorf("update user last login: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) GetUserByID(ctx context.Context, userID int64) (entity.User, error) {
+	const query = `
+SELECT id, email, full_name, status, wallet_balance::float8, min_available_balance::float8, last_login_at, created_at, updated_at
+FROM tenant_users
+WHERE id = $1
+  AND status = 'active'`
+
+	var item entity.User
+	err := s.pool.QueryRow(ctx, query, userID).Scan(
+		&item.ID, &item.Email, &item.FullName, &item.Status,
+		&item.WalletBalance, &item.MinAvailableBalance,
+		&item.LastLoginAt, &item.CreatedAt, &item.UpdatedAt,
+	)
+	if err != nil {
+		return entity.User{}, fmt.Errorf("get user by id: %w", err)
+	}
+	return item, nil
+}
+
+// --- UserClientKeyStore ---
+
+func (s *Store) ListUserClientAPIKeys(ctx context.Context, userID int64) ([]entity.ClientAPIKey, error) {
+	const query = `
+SELECT cak.id, cak.name, cak.masked_key, cak.status, cak.description,
+       COALESCE(cak.user_id, 0), COALESCE(tu.email, ''), COALESCE(tu.wallet_balance, 0)::float8, COALESCE(tu.min_available_balance, 0)::float8,
+       cak.rpm_limit, cak.daily_request_limit, cak.daily_token_limit,
+       cak.daily_cost_limit::float8, cak.monthly_cost_limit::float8, cak.warning_threshold::float8,
+       COALESCE(model_access.allowed_model_ids, ARRAY[]::bigint[]),
+       COALESCE(model_access.allowed_models, ARRAY[]::text[]),
+       COALESCE(daily_usage.daily_cost_used, 0)::float8,
+       COALESCE(monthly_usage.monthly_cost_used, 0)::float8,
+       cak.expires_at, cak.last_used_at, cak.last_error_at, cak.last_error_message, cak.created_at, cak.updated_at
+FROM client_api_keys cak
+LEFT JOIN tenant_users tu ON tu.id = cak.user_id
+LEFT JOIN LATERAL (
+    SELECT array_agg(cam.model_id ORDER BY cam.model_id) AS allowed_model_ids,
+           array_agg(m.public_name ORDER BY m.public_name) AS allowed_models
+    FROM client_api_key_models cam
+    JOIN models m ON m.id = cam.model_id
+    WHERE cam.client_api_key_id = cak.id
+) model_access ON TRUE
+LEFT JOIN LATERAL (
+    SELECT COALESCE(SUM(billable_amount), 0) AS daily_cost_used
+    FROM request_logs
+    WHERE client_api_key_id = cak.id AND created_at >= date_trunc('day', NOW())
+) daily_usage ON TRUE
+LEFT JOIN LATERAL (
+    SELECT COALESCE(SUM(billable_amount), 0) AS monthly_cost_used
+    FROM request_logs
+    WHERE client_api_key_id = cak.id AND created_at >= date_trunc('month', NOW())
+) monthly_usage ON TRUE
+WHERE cak.user_id = $1
+ORDER BY cak.id DESC`
+
+	rows, err := s.pool.Query(ctx, query, userID)
+	if err != nil {
+		return nil, fmt.Errorf("query user client api keys: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]entity.ClientAPIKey, 0)
+	for rows.Next() {
+		item, err := scanClientAPIKey(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate user client api keys: %w", err)
+	}
+	return items, nil
+}
+
+func (s *Store) CreateUserClientAPIKey(ctx context.Context, input entity.CreateClientAPIKeyInput) (entity.ClientAPIKey, error) {
+	return s.CreateClientAPIKey(ctx, input)
+}
+
+func (s *Store) DisableUserClientAPIKey(ctx context.Context, userID int64, id int64) (entity.ClientAPIKey, error) {
+	var clientKeyID int64
+	if err := s.pool.QueryRow(ctx, `
+UPDATE client_api_keys SET status = 'disabled'
+WHERE id = $1 AND user_id = $2
+RETURNING id`, id, userID).Scan(&clientKeyID); err != nil {
+		return entity.ClientAPIKey{}, fmt.Errorf("disable user client api key: %w", err)
+	}
+	return s.getClientAPIKeyByID(ctx, clientKeyID)
+}
+
+func (s *Store) GetUserPortalStats(ctx context.Context, userID int64) (entity.UserPortalStats, error) {
+	const query = `
+WITH request_stats AS (
+    SELECT COUNT(*)::bigint AS request_count,
+           COUNT(*) FILTER (WHERE rl.success)::bigint AS success_count,
+           COUNT(*) FILTER (WHERE NOT rl.success)::bigint AS failed_count,
+           COALESCE(AVG(rl.latency_ms), 0)::float8 AS average_latency_ms,
+           COALESCE(SUM(rl.prompt_tokens), 0)::bigint AS prompt_tokens,
+           COALESCE(SUM(rl.completion_tokens), 0)::bigint AS completion_tokens,
+           COALESCE(SUM(rl.total_tokens), 0)::bigint AS total_tokens,
+           COALESCE(SUM(rl.cost_amount), 0)::float8 AS cost_amount,
+           COALESCE(SUM(rl.billable_amount), 0)::float8 AS billable_amount
+    FROM request_logs rl
+    JOIN client_api_keys cak ON cak.id = rl.client_api_key_id
+    WHERE cak.user_id = $1
+),
+today_billing AS (
+    SELECT COALESCE(SUM(rl.cost_amount), 0)::float8 AS cost_amount,
+           COALESCE(SUM(rl.billable_amount), 0)::float8 AS billable_amount
+    FROM request_logs rl
+    JOIN client_api_keys cak ON cak.id = rl.client_api_key_id
+    WHERE cak.user_id = $1 AND rl.created_at >= date_trunc('day', NOW())
+),
+month_billing AS (
+    SELECT COALESCE(SUM(rl.cost_amount), 0)::float8 AS cost_amount,
+           COALESCE(SUM(rl.billable_amount), 0)::float8 AS billable_amount
+    FROM request_logs rl
+    JOIN client_api_keys cak ON cak.id = rl.client_api_key_id
+    WHERE cak.user_id = $1 AND rl.created_at >= date_trunc('month', NOW())
+),
+key_stats AS (
+    SELECT COUNT(*)::bigint AS client_key_count,
+           COUNT(*) FILTER (WHERE status = 'active')::bigint AS active_client_keys
+    FROM client_api_keys WHERE user_id = $1
+),
+wallet AS (
+    SELECT wallet_balance::float8 FROM tenant_users WHERE id = $1
+)
+SELECT rs.request_count, rs.success_count, rs.failed_count, rs.average_latency_ms,
+       rs.prompt_tokens, rs.completion_tokens, rs.total_tokens, rs.cost_amount, rs.billable_amount,
+       tb.cost_amount, tb.billable_amount, mb.cost_amount, mb.billable_amount,
+       ks.client_key_count, ks.active_client_keys, w.wallet_balance
+FROM request_stats rs
+CROSS JOIN today_billing tb
+CROSS JOIN month_billing mb
+CROSS JOIN key_stats ks
+CROSS JOIN wallet w`
+
+	var stats entity.UserPortalStats
+	if err := s.pool.QueryRow(ctx, query, userID).Scan(
+		&stats.RequestCount, &stats.SuccessCount, &stats.FailedCount, &stats.AverageLatencyMS,
+		&stats.PromptTokens, &stats.CompletionTokens, &stats.TotalTokens,
+		&stats.CostAmount, &stats.BillableAmount,
+		&stats.TodayCostAmount, &stats.TodayBillable,
+		&stats.MonthCostAmount, &stats.MonthBillable,
+		&stats.ClientKeyCount, &stats.ActiveClientKeys, &stats.WalletBalance,
+	); err != nil {
+		return entity.UserPortalStats{}, fmt.Errorf("query user portal stats: %w", err)
+	}
+	if stats.RequestCount > 0 {
+		stats.SuccessRate = float64(stats.SuccessCount) * 100 / float64(stats.RequestCount)
+	}
+	return stats, nil
+}
+
+func (s *Store) ListUserRequestLogs(ctx context.Context, userID int64, input entity.ListRequestLogsInput) (entity.RequestLogPage, error) {
+	input.UserID = userID
+	return s.ListRequestLogs(ctx, input)
+}
+
+func (s *Store) GetUserRequestLog(ctx context.Context, userID int64, id int64) (entity.RequestLogDetail, error) {
+	const query = `
+SELECT rl.id, rl.trace_id, rl.request_type, rl.model_public_name, rl.upstream_model,
+       COALESCE(rl.provider_id, 0), COALESCE(p.name, ''), COALESCE(rl.provider_key_id, 0), COALESCE(pk.name, ''),
+       COALESCE(rl.client_api_key_id, 0), COALESCE(cak.name, ''),
+       COALESCE(HOST(rl.client_ip), ''), rl.request_method, rl.request_path, rl.http_status, rl.success, rl.latency_ms,
+       rl.prompt_tokens, rl.completion_tokens, rl.total_tokens,
+       rl.reserved_amount::float8, rl.cost_amount::float8, rl.billable_amount::float8,
+       rl.error_type, rl.error_message, rl.created_at, rl.request_payload, rl.response_payload, rl.metadata
+FROM request_logs rl
+LEFT JOIN providers p ON p.id = rl.provider_id
+LEFT JOIN provider_keys pk ON pk.id = rl.provider_key_id
+LEFT JOIN client_api_keys cak ON cak.id = rl.client_api_key_id
+WHERE rl.id = $1
+  AND EXISTS (
+      SELECT 1 FROM client_api_keys cak_filter
+      WHERE cak_filter.id = rl.client_api_key_id AND cak_filter.user_id = $2
+  )`
+
+	var item entity.RequestLogDetail
+	err := s.pool.QueryRow(ctx, query, id, userID).Scan(
+		&item.ID, &item.TraceID, &item.RequestType, &item.ModelPublicName, &item.UpstreamModel,
+		&item.ProviderID, &item.ProviderName, &item.ProviderKeyID, &item.ProviderKeyName,
+		&item.ClientAPIKeyID, &item.ClientAPIKeyName,
+		&item.ClientIP, &item.RequestMethod, &item.RequestPath,
+		&item.HTTPStatus, &item.Success, &item.LatencyMS,
+		&item.PromptTokens, &item.CompletionTokens, &item.TotalTokens,
+		&item.ReservedAmount, &item.CostAmount, &item.BillableAmount,
+		&item.ErrorType, &item.ErrorMessage, &item.CreatedAt,
+		&item.RequestPayload, &item.ResponsePayload, &item.Metadata,
+	)
+	if err != nil {
+		return entity.RequestLogDetail{}, fmt.Errorf("query user request log: %w", err)
+	}
+	return item, nil
+}
+
+func (s *Store) ExportUserRequestLogs(ctx context.Context, userID int64, input entity.ListRequestLogsInput) ([]entity.RequestLog, error) {
+	input.UserID = userID
+	return s.ExportRequestLogs(ctx, input)
+}
+
+// --- RequestLogWriter ---
+
+func (s *Store) DeductUserWalletUsage(ctx context.Context, input entity.UserWalletUsageDebitInput) error {
+	if input.ClientAPIKeyID <= 0 || input.BillableAmount <= 0 {
+		return nil
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin deduct user wallet tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var userID int64
+	var before float64
+	err = tx.QueryRow(ctx, `
+SELECT tu.id, tu.wallet_balance::float8
+FROM client_api_keys cak
+JOIN tenant_users tu ON tu.id = cak.user_id
+WHERE cak.id = $1
+FOR UPDATE`, input.ClientAPIKeyID).Scan(&userID, &before)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		return fmt.Errorf("load user wallet for debit: %w", err)
+	}
+
+	after := before - input.BillableAmount
+	if after < 0 {
+		after = 0
+	}
+
+	if _, err := tx.Exec(ctx, `UPDATE tenant_users SET wallet_balance = $2 WHERE id = $1`, userID, after); err != nil {
+		return fmt.Errorf("update user wallet debit: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+INSERT INTO tenant_wallet_ledger (
+    user_id, direction, amount, balance_before, balance_after, note, operator_type,
+    request_log_id, trace_id, model_public_name, total_tokens, reserved_amount, cost_amount, billable_amount
+) VALUES ($1, 'debit', $2, $3, $4, $5, 'system', NULLIF($6, 0), $7, $8, $9, $10, $11, $12)`,
+		userID, input.BillableAmount, before, after, input.Note,
+		input.RequestLogID, input.TraceID, input.ModelPublicName,
+		input.TotalTokens, input.ReservedAmount, input.CostAmount, input.BillableAmount,
+	); err != nil {
+		return fmt.Errorf("insert debit wallet ledger: %w", err)
+	}
+
+	return tx.Commit(ctx)
+}
+
+// --- Alert store methods ---
+
+func (s *Store) GetUserBillingReconciliation(ctx context.Context) ([]entity.UserBillingReconciliation, error) {
+	const query = `
+WITH ledger AS (
+    SELECT user_id,
+           COALESCE(SUM(CASE WHEN direction = 'credit' THEN amount ELSE 0 END), 0)::float8 AS ledger_credit_amount,
+           COALESCE(SUM(CASE WHEN direction = 'debit' THEN amount ELSE 0 END), 0)::float8 AS ledger_debit_amount
+    FROM tenant_wallet_ledger
+    GROUP BY user_id
+),
+logs AS (
+    SELECT cak.user_id,
+           COALESCE(SUM(rl.billable_amount), 0)::float8 AS log_billable_amount,
+           COALESCE(SUM(rl.cost_amount), 0)::float8 AS log_cost_amount
+    FROM request_logs rl
+    JOIN client_api_keys cak ON cak.id = rl.client_api_key_id
+    GROUP BY cak.user_id
+)
+SELECT tu.id, tu.email, tu.wallet_balance::float8,
+       COALESCE(l.ledger_credit_amount, 0)::float8,
+       COALESCE(l.ledger_debit_amount, 0)::float8,
+       (COALESCE(l.ledger_credit_amount, 0) - COALESCE(l.ledger_debit_amount, 0))::float8,
+       COALESCE(g.log_billable_amount, 0)::float8,
+       COALESCE(g.log_cost_amount, 0)::float8
+FROM tenant_users tu
+LEFT JOIN ledger l ON l.user_id = tu.id
+LEFT JOIN logs g ON g.user_id = tu.id
+ORDER BY tu.id DESC`
+
+	rows, err := s.pool.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("query user billing reconciliation: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]entity.UserBillingReconciliation, 0)
+	for rows.Next() {
+		var item entity.UserBillingReconciliation
+		if err := rows.Scan(
+			&item.UserID, &item.UserEmail, &item.WalletBalance,
+			&item.LedgerCreditAmount, &item.LedgerDebitAmount, &item.LedgerNetAmount,
+			&item.LogBillableAmount, &item.LogCostAmount,
+		); err != nil {
+			return nil, fmt.Errorf("scan user billing reconciliation: %w", err)
+		}
+		item.WalletVsLedgerDiff = roundCurrency(item.WalletBalance - item.LedgerNetAmount)
+		item.LedgerVsLogsDiff = roundCurrency(item.LedgerDebitAmount - item.LogBillableAmount)
+		item.IsWalletBalanced = isCurrencyZero(item.WalletVsLedgerDiff)
+		item.IsBillingBalanced = isCurrencyZero(item.LedgerVsLogsDiff)
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate user billing reconciliation: %w", err)
+	}
+	return items, nil
+}
+
+func (s *Store) GetUserWalletBlockAnomalies(ctx context.Context, since time.Time, walletBlockThreshold int, reserveBlockThreshold int) ([]entity.UserWalletBlockAnomaly, error) {
+	const query = `
+SELECT tu.id, tu.email,
+       COUNT(*) FILTER (WHERE rl.error_type IN ('wallet_empty', 'wallet_below_minimum'))::bigint AS wallet_blocked_count,
+       COUNT(*) FILTER (WHERE rl.error_type = 'wallet_reserve_insufficient')::bigint AS reserve_blocked_count
+FROM request_logs rl
+JOIN client_api_keys cak ON cak.id = rl.client_api_key_id
+JOIN tenant_users tu ON tu.id = cak.user_id
+WHERE rl.created_at >= $1
+  AND rl.error_type IN ('wallet_empty', 'wallet_below_minimum', 'wallet_reserve_insufficient')
+GROUP BY tu.id, tu.email
+ORDER BY tu.id DESC`
+
+	rows, err := s.pool.Query(ctx, query, since)
+	if err != nil {
+		return nil, fmt.Errorf("query user wallet block anomalies: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]entity.UserWalletBlockAnomaly, 0)
+	for rows.Next() {
+		var item entity.UserWalletBlockAnomaly
+		if err := rows.Scan(&item.UserID, &item.UserEmail, &item.WalletBlockedCount, &item.ReserveBlockedCount); err != nil {
+			return nil, fmt.Errorf("scan user wallet block anomaly: %w", err)
+		}
+		item.IsWalletBlockedAnomalous = item.WalletBlockedCount >= int64(walletBlockThreshold)
+		item.IsReserveBlockedAnomalous = item.ReserveBlockedCount >= int64(reserveBlockThreshold)
+		if item.IsWalletBlockedAnomalous || item.IsReserveBlockedAnomalous {
+			items = append(items, item)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate user wallet block anomalies: %w", err)
+	}
+	return items, nil
+}
+
+func (s *Store) GetUserBillingDebitAnomalies(ctx context.Context, since time.Time, minCount int, minBillableAmount float64) ([]entity.UserBillingDebitAnomaly, error) {
+	const query = `
+SELECT tu.id, tu.email,
+       COUNT(*)::bigint AS missing_debit_count,
+       COALESCE(SUM(rl.billable_amount), 0)::float8 AS missing_billable_amount,
+       COALESCE(SUM(rl.cost_amount), 0)::float8 AS missing_cost_amount
+FROM request_logs rl
+JOIN client_api_keys cak ON cak.id = rl.client_api_key_id
+JOIN tenant_users tu ON tu.id = cak.user_id
+LEFT JOIN tenant_wallet_ledger twl ON twl.request_log_id = rl.id AND twl.direction = 'debit'
+WHERE rl.created_at >= $1
+  AND rl.success = TRUE
+  AND rl.billable_amount > 0
+  AND twl.id IS NULL
+GROUP BY tu.id, tu.email
+ORDER BY missing_billable_amount DESC, missing_debit_count DESC, tu.id ASC`
+
+	rows, err := s.pool.Query(ctx, query, since)
+	if err != nil {
+		return nil, fmt.Errorf("query user billing debit anomalies: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]entity.UserBillingDebitAnomaly, 0)
+	for rows.Next() {
+		var item entity.UserBillingDebitAnomaly
+		if err := rows.Scan(
+			&item.UserID, &item.UserEmail,
+			&item.MissingDebitCount, &item.MissingBillableAmount, &item.MissingCostAmount,
+		); err != nil {
+			return nil, fmt.Errorf("scan user billing debit anomaly: %w", err)
+		}
+		item.IsCountAnomalous = item.MissingDebitCount >= int64(minCount)
+		item.IsBillableAmountAnomalous = item.MissingBillableAmount >= minBillableAmount
+		if item.IsCountAnomalous || item.IsBillableAmountAnomalous {
+			items = append(items, item)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate user billing debit anomalies: %w", err)
+	}
+	return items, nil
 }

@@ -10,11 +10,11 @@ import (
 )
 
 type Store interface {
-	GetTenantWalletBlockAnomalies(ctx context.Context, since time.Time, walletBlockThreshold int, reserveBlockThreshold int) ([]entity.TenantWalletBlockAnomaly, error)
+	GetUserWalletBlockAnomalies(ctx context.Context, since time.Time, walletBlockThreshold int, reserveBlockThreshold int) ([]entity.UserWalletBlockAnomaly, error)
 }
 
 type Notifier interface {
-	SendTenantWalletBlockAnomaly(ctx context.Context, item entity.TenantWalletBlockAnomaly, window time.Duration) error
+	SendUserWalletBlockAnomaly(ctx context.Context, item entity.UserWalletBlockAnomaly, window time.Duration) error
 }
 
 type Service struct {
@@ -76,35 +76,29 @@ func (s *Service) Start(ctx context.Context) {
 }
 
 func (s *Service) runOnce(ctx context.Context) {
-	items, err := s.store.GetTenantWalletBlockAnomalies(
-		ctx,
-		time.Now().UTC().Add(-s.window),
-		s.walletBlockThreshold,
-		s.reserveBlockThreshold,
+	items, err := s.store.GetUserWalletBlockAnomalies(
+		ctx, time.Now().UTC().Add(-s.window),
+		s.walletBlockThreshold, s.reserveBlockThreshold,
 	)
 	if err != nil {
-		log.Printf("tenant_wallet_alert_check_failed: %v", err)
+		log.Printf("user_wallet_alert_check_failed: %v", err)
 		return
 	}
 
 	active := make(map[int64]struct{}, len(items))
 	for _, item := range items {
-		active[item.TenantID] = struct{}{}
-		if s.markAlerted(item.TenantID) {
+		active[item.UserID] = struct{}{}
+		if s.markAlerted(item.UserID) {
 			continue
 		}
 
 		log.Printf(
-			"tenant_wallet_block_anomaly tenant_id=%d tenant_name=%q wallet_blocked_count=%d reserve_blocked_count=%d window=%s",
-			item.TenantID,
-			item.TenantName,
-			item.WalletBlockedCount,
-			item.ReserveBlockedCount,
-			s.window,
+			"user_wallet_block_anomaly user_id=%d user_email=%q wallet_blocked_count=%d reserve_blocked_count=%d window=%s",
+			item.UserID, item.UserEmail, item.WalletBlockedCount, item.ReserveBlockedCount, s.window,
 		)
 		if s.notifier != nil {
-			if err := s.notifier.SendTenantWalletBlockAnomaly(ctx, item, s.window); err != nil {
-				log.Printf("tenant_wallet_block_alert_failed tenant_id=%d tenant_name=%q err=%v", item.TenantID, item.TenantName, err)
+			if err := s.notifier.SendUserWalletBlockAnomaly(ctx, item, s.window); err != nil {
+				log.Printf("user_wallet_block_alert_failed user_id=%d user_email=%q err=%v", item.UserID, item.UserEmail, err)
 			}
 		}
 	}
@@ -112,14 +106,14 @@ func (s *Service) runOnce(ctx context.Context) {
 	s.clearRecovered(active)
 }
 
-func (s *Service) markAlerted(tenantID int64) bool {
+func (s *Service) markAlerted(userID int64) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.alerted[tenantID] {
+	if s.alerted[userID] {
 		return true
 	}
-	s.alerted[tenantID] = true
+	s.alerted[userID] = true
 	return false
 }
 
@@ -127,9 +121,9 @@ func (s *Service) clearRecovered(active map[int64]struct{}) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	for tenantID := range s.alerted {
-		if _, ok := active[tenantID]; !ok {
-			delete(s.alerted, tenantID)
+	for userID := range s.alerted {
+		if _, ok := active[userID]; !ok {
+			delete(s.alerted, userID)
 		}
 	}
 }

@@ -247,11 +247,11 @@ func (h *Handler) handleGeminiGenerateContent(c *gin.Context, options geminiOpti
 
 	delete(payload, "model")
 	applyGeminiGenerationDefaults(payload, route.Model)
-	if clientKey, ok := middleware.ClientAPIKeyFromContext(c); ok && clientKey.TenantID > 0 {
+	if clientKey, ok := middleware.ClientAPIKeyFromContext(c); ok && clientKey.UserID > 0 {
 		requiredReserve := estimateGeminiReserveAmount(payload, route.Model)
 		logState.reservedAmount = requiredReserve
 		logState.metadata["required_wallet_reserve"] = requiredReserve
-		if requiredReserve > 0 && clientKey.TenantWalletBalance < requiredReserve {
+		if requiredReserve > 0 && clientKey.UserWalletBalance < requiredReserve {
 			writeJSONError(
 				http.StatusPaymentRequired,
 				"wallet_reserve_insufficient",

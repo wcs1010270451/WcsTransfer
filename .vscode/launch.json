@@ -8,6 +8,10 @@
             "mode": "debug",
             "program": "${workspaceFolder}/backend/cmd/server",
             "cwd": "${workspaceFolder}/backend",
+            "env": {
+                "PATH": "/usr/local/go/bin:${env:PATH}",
+                "GOTOOLCHAIN": "go1.24.6"
+            },
             "envFile": "${workspaceFolder}/backend/.env",
             "console": "integratedTerminal"
         },
@@ -18,6 +22,10 @@
             "mode": "auto",
             "program": "${workspaceFolder}/backend/cmd/server",
             "cwd": "${workspaceFolder}/backend",
+            "env": {
+                "PATH": "/usr/local/go/bin:${env:PATH}",
+                "GOTOOLCHAIN": "go1.24.6"
+            },
             "envFile": "${workspaceFolder}/backend/.env",
             "console": "integratedTerminal"
         },
@@ -28,6 +36,10 @@
             "mode": "test",
             "program": "${fileDirname}",
             "cwd": "${workspaceFolder}/backend",
+            "env": {
+                "PATH": "/usr/local/go/bin:${env:PATH}",
+                "GOTOOLCHAIN": "go1.24.6"
+            },
             "envFile": "${workspaceFolder}/backend/.env",
             "console": "integratedTerminal"
         },
