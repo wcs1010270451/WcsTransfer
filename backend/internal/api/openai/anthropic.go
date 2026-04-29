@@ -200,6 +200,9 @@ func (h *Handler) handleMessages(c *gin.Context, options chatCompletionOptions) 
 	if _, exists := payload["temperature"]; !exists && route.Model.Temperature > 0 {
 		payload["temperature"] = route.Model.Temperature
 	}
+	logState.promptTokens = estimatePromptTokens(payload["messages"])
+	logState.metadata["estimated_prompt_tokens"] = logState.promptTokens
+
 	if clientKey, ok := middleware.ClientAPIKeyFromContext(c); ok && clientKey.UserID > 0 {
 		requiredReserve := estimateAnthropicReserveAmount(payload, route.Model)
 		logState.reservedAmount = requiredReserve

@@ -396,6 +396,10 @@ func (h *Handler) handleChatCompletions(c *gin.Context, options chatCompletionOp
 	if _, exists := payload["temperature"]; !exists {
 		payload["temperature"] = route.Model.Temperature
 	}
+	// 提前估算输入 token，上游报错时也能统计（成功后会被真实值覆盖）
+	logState.promptTokens = estimatePromptTokens(payload["messages"])
+	logState.metadata["estimated_prompt_tokens"] = logState.promptTokens
+
 	if clientKey, ok := middleware.ClientAPIKeyFromContext(c); ok && clientKey.UserID > 0 {
 		requiredReserve := estimateChatReserveAmount(payload, route.Model)
 		logState.reservedAmount = requiredReserve
@@ -692,6 +696,9 @@ func (h *Handler) handleEmbeddings(c *gin.Context, options chatCompletionOptions
 	}
 
 	payload["model"] = route.Model.UpstreamModel
+	logState.promptTokens = estimatePromptTokens(payload["input"])
+	logState.metadata["estimated_prompt_tokens"] = logState.promptTokens
+
 	if clientKey, ok := middleware.ClientAPIKeyFromContext(c); ok && clientKey.UserID > 0 {
 		requiredReserve := estimateEmbeddingsReserveAmount(payload, route.Model)
 		logState.reservedAmount = requiredReserve

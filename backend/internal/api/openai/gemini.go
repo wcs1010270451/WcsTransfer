@@ -247,6 +247,9 @@ func (h *Handler) handleGeminiGenerateContent(c *gin.Context, options geminiOpti
 
 	delete(payload, "model")
 	applyGeminiGenerationDefaults(payload, route.Model)
+	logState.promptTokens = estimatePromptTokens(payload["contents"])
+	logState.metadata["estimated_prompt_tokens"] = logState.promptTokens
+
 	if clientKey, ok := middleware.ClientAPIKeyFromContext(c); ok && clientKey.UserID > 0 {
 		requiredReserve := estimateGeminiReserveAmount(payload, route.Model)
 		logState.reservedAmount = requiredReserve

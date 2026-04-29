@@ -82,7 +82,7 @@ func Load() Config {
 		RedisDB:                     getInt("REDIS_DB", 0),
 		DependencyTimeout:           getDuration("DEPENDENCY_TIMEOUT", 3*time.Second),
 		ReadTimeout:                 getDuration("HTTP_READ_TIMEOUT", 15*time.Second),
-		WriteTimeout:                getDuration("HTTP_WRITE_TIMEOUT", 60*time.Second),
+		WriteTimeout:                getDuration("HTTP_WRITE_TIMEOUT", 300*time.Second),
 		ShutdownTimeout:             getDuration("HTTP_SHUTDOWN_TIMEOUT", 10*time.Second),
 		ReconciliationEnabled:       getBool("RECONCILIATION_ENABLED", env == "production"),
 		ReconciliationInterval:      getDuration("RECONCILIATION_INTERVAL", time.Hour),
