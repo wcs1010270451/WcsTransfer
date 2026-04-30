@@ -48,6 +48,11 @@ export default function ProvidersPage() {
         extraConfig: JSON.stringify({ gemini_api_version: "v1beta" }, null, 2),
         note: "这里只填写 Gemini 官方 API 主机地址，网关会自动拼接 /v1beta/models/{model}:generateContent。",
       },
+      vertexai: {
+        baseURL: "",
+        extraConfig: JSON.stringify({ project_id: "", location: "us-central1" }, null, 2),
+        note: "Vertex AI 使用 ADC 鉴权，无需填写 Base URL 和 API Key。请在附加配置中填写 project_id 和 location。",
+      },
       openai: {
         baseURL: "https://api.openai.com/v1",
         extraConfig: "{}",
@@ -257,7 +262,8 @@ export default function ProvidersPage() {
               options={[
                 { label: "OpenAI 兼容", value: "openai_compatible" },
                 { label: "Anthropic", value: "anthropic" },
-                { label: "Gemini", value: "gemini" },
+                { label: "Gemini（AI Studio）", value: "gemini" },
+                { label: "Vertex AI（ADC）", value: "vertexai" },
                 { label: "OpenAI", value: "openai" },
                 { label: "Azure OpenAI", value: "azure_openai" },
                 { label: "自定义", value: "custom" },
@@ -267,16 +273,18 @@ export default function ProvidersPage() {
           <Form.Item
             label="Base URL"
             name="base_url"
-            rules={[{ required: true }, { validator: validateBaseURL }]}
+            rules={providerType === "vertexai" ? [] : [{ required: true }, { validator: validateBaseURL }]}
             extra={
               providerType === "anthropic"
                 ? "Anthropic 示例：https://api.anthropic.com"
                 : providerType === "gemini"
                   ? "Gemini 示例：https://generativelanguage.googleapis.com"
-                  : "OpenAI 兼容示例：https://api.openai.com/v1"
+                  : providerType === "vertexai"
+                    ? "Vertex AI 无需填写 Base URL，由 SDK 自动构建。"
+                    : "OpenAI 兼容示例：https://api.openai.com/v1"
             }
           >
-            <Input placeholder="https://api.example.com/v1" />
+            <Input placeholder="https://api.example.com/v1" disabled={providerType === "vertexai"} />
           </Form.Item>
           <Form.Item label="状态" name="status">
             <Select options={[{ label: "启用", value: "active" }, { label: "停用", value: "disabled" }]} />
@@ -301,6 +309,18 @@ export default function ProvidersPage() {
               Gemini 附加配置当前支持 `gemini_api_version`，默认 `v1beta`。
               <br />
               <code>{`{"gemini_api_version":"v1beta"}`}</code>
+            </Typography.Paragraph>
+          ) : null}
+
+          {providerType === "vertexai" ? (
+            <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
+              Vertex AI 使用 ADC（Application Default Credentials）鉴权，无需 API Key。
+              <br />
+              附加配置必须填写 <code>project_id</code> 和 <code>location</code>：
+              <br />
+              <code>{`{"project_id":"your-gcp-project-id","location":"us-central1"}`}</code>
+              <br />
+              Provider Key 的 API Key 字段可随意填写占位符（不会被使用）。
             </Typography.Paragraph>
           ) : null}
         </Form>
