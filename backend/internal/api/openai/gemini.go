@@ -209,7 +209,8 @@ func (h *Handler) handleGeminiGenerateContent(c *gin.Context, options geminiOpti
 		writeJSONError(http.StatusInternalServerError, "database_error", err.Error())
 		return
 	}
-	if !strings.EqualFold(strings.TrimSpace(route.Provider.ProviderType), "gemini") {
+	pt := strings.TrimSpace(route.Provider.ProviderType)
+	if !strings.EqualFold(pt, "gemini") && !strings.EqualFold(pt, providerTypeVertexAI) {
 		writeJSONError(http.StatusBadRequest, "invalid_provider_type", "selected model is not configured for gemini native api")
 		return
 	}
@@ -225,6 +226,37 @@ func (h *Handler) handleGeminiGenerateContent(c *gin.Context, options geminiOpti
 	logState.metadata["reserve_multiplier"] = route.Model.ReserveMultiplier
 	logState.metadata["reserve_min_amount"] = route.Model.ReserveMinAmount
 
+	delete(payload, "model")
+	applyGeminiGenerationDefaults(payload, route.Model)
+	logState.promptTokens = estimatePromptTokens(payload["contents"])
+	logState.metadata["estimated_prompt_tokens"] = logState.promptTokens
+
+	if clientKey, ok := middleware.ClientAPIKeyFromContext(c); ok && clientKey.UserID > 0 {
+		var requiredReserve float64
+		if strings.EqualFold(pt, providerTypeVertexAI) {
+			requiredReserve = estimateVertexAIReserveAmount(payload, route.Model)
+		} else {
+			requiredReserve = estimateGeminiReserveAmount(payload, route.Model)
+		}
+		logState.reservedAmount = requiredReserve
+		logState.metadata["required_wallet_reserve"] = requiredReserve
+		if requiredReserve > 0 && clientKey.UserWalletBalance < requiredReserve {
+			writeJSONError(
+				http.StatusPaymentRequired,
+				"wallet_reserve_insufficient",
+				fmt.Sprintf("wallet balance is below the required reserve %.4f USD", requiredReserve),
+			)
+			return
+		}
+	}
+
+	// Vertex AI path: use ADC + SDK, bypass key rotation
+	if strings.EqualFold(pt, providerTypeVertexAI) {
+		h.handleWithVertexAISDK(c, payload, route, &logState, options)
+		return
+	}
+
+	// Legacy Gemini API path (API key based)
 	route, err = applyChatRouteOptions(route, chatCompletionOptions{
 		RouteStrategy:   options.RouteStrategy,
 		ProviderKeyID:   options.ProviderKeyID,
@@ -243,25 +275,6 @@ func (h *Handler) handleGeminiGenerateContent(c *gin.Context, options geminiOpti
 	logState.metadata["candidate_key_count"] = len(route.Keys)
 	if len(skippedKeys) > 0 {
 		logState.metadata["temporarily_skipped_keys"] = skippedKeys
-	}
-
-	delete(payload, "model")
-	applyGeminiGenerationDefaults(payload, route.Model)
-	logState.promptTokens = estimatePromptTokens(payload["contents"])
-	logState.metadata["estimated_prompt_tokens"] = logState.promptTokens
-
-	if clientKey, ok := middleware.ClientAPIKeyFromContext(c); ok && clientKey.UserID > 0 {
-		requiredReserve := estimateGeminiReserveAmount(payload, route.Model)
-		logState.reservedAmount = requiredReserve
-		logState.metadata["required_wallet_reserve"] = requiredReserve
-		if requiredReserve > 0 && clientKey.UserWalletBalance < requiredReserve {
-			writeJSONError(
-				http.StatusPaymentRequired,
-				"wallet_reserve_insufficient",
-				fmt.Sprintf("tenant wallet balance is below the required reserve %.4f USD", requiredReserve),
-			)
-			return
-		}
 	}
 
 	rewrittenBody, err := json.Marshal(payload)

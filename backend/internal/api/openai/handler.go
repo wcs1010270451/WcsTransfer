@@ -18,6 +18,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
+	"google.golang.org/genai"
 
 	"wcstransfer/backend/internal/entity"
 	"wcstransfer/backend/internal/middleware"
@@ -35,12 +36,14 @@ const (
 )
 
 type Handler struct {
-	store      repository.PublicModelStore
-	logWriter  repository.RequestLogWriter
-	httpClient *http.Client
-	counters   sync.Map
-	keyHealth  *keyhealth.Tracker
-	quota      *clientquota.Service
+	store           repository.PublicModelStore
+	logWriter       repository.RequestLogWriter
+	httpClient      *http.Client
+	counters        sync.Map
+	keyHealth       *keyhealth.Tracker
+	quota           *clientquota.Service
+	vertexClientsMu sync.RWMutex
+	vertexClients   map[string]*genai.Client
 }
 
 type chatLogState struct {
@@ -107,12 +110,41 @@ func NewHandler(
 	}
 
 	return &Handler{
-		store:      store,
-		logWriter:  logWriter,
-		httpClient: client,
-		keyHealth:  tracker,
-		quota:      quota,
+		store:         store,
+		logWriter:     logWriter,
+		httpClient:    client,
+		keyHealth:     tracker,
+		quota:         quota,
+		vertexClients: make(map[string]*genai.Client),
 	}
+}
+
+func (h *Handler) getVertexAIClient(ctx context.Context, projectID, location string) (*genai.Client, error) {
+	key := projectID + ":" + location
+
+	h.vertexClientsMu.RLock()
+	if c, ok := h.vertexClients[key]; ok {
+		h.vertexClientsMu.RUnlock()
+		return c, nil
+	}
+	h.vertexClientsMu.RUnlock()
+
+	h.vertexClientsMu.Lock()
+	defer h.vertexClientsMu.Unlock()
+	if c, ok := h.vertexClients[key]; ok {
+		return c, nil
+	}
+
+	c, err := genai.NewClient(ctx, &genai.ClientConfig{
+		Project:  projectID,
+		Location: location,
+		Backend:  genai.BackendVertexAI,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("init Vertex AI client: %w", err)
+	}
+	h.vertexClients[key] = c
+	return c, nil
 }
 
 func (h *Handler) ListModels(c *gin.Context) {
