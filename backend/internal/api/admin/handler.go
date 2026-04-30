@@ -524,8 +524,12 @@ func (h *Handler) CreateProvider(c *gin.Context) {
 		ExtraConfig:  normalizeJSON(request.ExtraConfig),
 	}
 
-	if input.Name == "" || input.Slug == "" || input.BaseURL == "" {
-		writeBadRequest(c, "name, slug, and base_url are required")
+	if input.Name == "" || input.Slug == "" {
+		writeBadRequest(c, "name and slug are required")
+		return
+	}
+	if input.BaseURL == "" && input.ProviderType != "vertexai" {
+		writeBadRequest(c, "base_url is required for this provider type")
 		return
 	}
 
@@ -572,8 +576,12 @@ func (h *Handler) UpdateProvider(c *gin.Context) {
 		ExtraConfig:  normalizeJSON(request.ExtraConfig),
 	}
 
-	if input.Name == "" || input.Slug == "" || input.BaseURL == "" {
-		writeBadRequest(c, "name, slug, and base_url are required")
+	if input.Name == "" || input.Slug == "" {
+		writeBadRequest(c, "name and slug are required")
+		return
+	}
+	if input.BaseURL == "" && input.ProviderType != "vertexai" {
+		writeBadRequest(c, "base_url is required for this provider type")
 		return
 	}
 
