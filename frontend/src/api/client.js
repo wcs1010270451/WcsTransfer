@@ -547,3 +547,85 @@ export const disablePortalClientKey = async (id) => {
   const response = await createPortalClient().post(`/portal/client-keys/${id}/disable`);
   return response.data;
 };
+
+export const debugGeminiGenerateContent = async (payload) => {
+  const response = await createClient().post("/admin/debug/gemini/generate-content", payload);
+  return {
+    data: response.data,
+    headers: response.headers,
+    status: response.status,
+  };
+};
+
+export const debugGeminiStreamGenerateContent = async (payload, options = {}) => {
+  const { apiBaseUrl } = useSettingsStore.getState();
+  const response = await fetch(`${apiBaseUrl}/admin/debug/gemini/stream-generate-content`, {
+    method: "POST",
+    headers: createFetchHeaders(),
+    body: JSON.stringify(payload),
+    signal: options.signal,
+  });
+
+  const headers = Object.fromEntries(response.headers.entries());
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    const error = new Error(data?.error?.message || `Request failed with status ${response.status}`);
+    error.response = { data, headers, status: response.status };
+    throw error;
+  }
+
+  const reader = response.body?.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let rawText = "";
+  let assistantText = "";
+  let usage = null;
+
+  const extractGeminiText = (chunk) => {
+    try {
+      const parsed = JSON.parse(chunk);
+      const text = parsed?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (text) assistantText += text;
+      const u = parsed?.usageMetadata;
+      if (u) {
+        usage = {
+          prompt_tokens: u.promptTokenCount ?? 0,
+          completion_tokens: u.candidatesTokenCount ?? 0,
+          total_tokens: u.totalTokenCount ?? (u.promptTokenCount ?? 0) + (u.candidatesTokenCount ?? 0),
+        };
+      }
+      options.onUpdate?.({ assistantText, rawText, usage, headers, status: response.status });
+    } catch {}
+  };
+
+  while (reader) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    const chunkText = decoder.decode(value, { stream: true });
+    rawText += chunkText;
+    buffer += chunkText;
+    let sep = buffer.indexOf("\n\n");
+    while (sep >= 0) {
+      const event = buffer.slice(0, sep);
+      buffer = buffer.slice(sep + 2);
+      for (const line of event.split("\n")) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith("data:")) {
+          const data = trimmed.slice(5).trim();
+          if (data && data !== "[DONE]") extractGeminiText(data);
+        }
+      }
+      sep = buffer.indexOf("\n\n");
+    }
+  }
+
+  return {
+    data: { stream: true, assistant_text: assistantText, usage },
+    headers,
+    status: response.status,
+    assistantText,
+    rawText,
+    usage,
+  };
+};

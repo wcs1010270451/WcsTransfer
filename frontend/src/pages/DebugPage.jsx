@@ -1,6 +1,6 @@
 ﻿import { useEffect, useRef, useState } from "react";
 import { App, Button, Card, Form, Input, InputNumber, Select, Space, Switch, Tag, Typography } from "antd";
-import { debugChatCompletion, debugChatCompletionStream, debugEmbeddings, fetchKeys, fetchModels } from "../api/client";
+import { debugChatCompletion, debugChatCompletionStream, debugEmbeddings, debugGeminiGenerateContent, debugGeminiStreamGenerateContent, fetchKeys, fetchModels } from "../api/client";
 import PageHeaderCard from "../components/PageHeaderCard";
 
 const routeStrategyOptions = [
@@ -11,8 +11,9 @@ const routeStrategyOptions = [
 ];
 
 const requestTypeOptions = [
-  { label: "chat_completions", value: "chat" },
-  { label: "embeddings", value: "embeddings" },
+  { label: "chat_completions（OpenAI）", value: "chat" },
+  { label: "embeddings（OpenAI）", value: "embeddings" },
+  { label: "generateContent（Gemini / Vertex AI）", value: "gemini" },
 ];
 
 export default function DebugPage() {
@@ -72,7 +73,16 @@ export default function DebugPage() {
 
     try {
       const payload = { model: values.model };
-      if (values.request_type === "chat") {
+      if (values.request_type === "gemini") {
+        payload.contents = [{ role: "user", parts: [{ text: values.user_message }] }];
+        if (values.system_prompt) {
+          payload.systemInstruction = { parts: [{ text: values.system_prompt }] };
+        }
+        const genConfig = {};
+        if (values.temperature != null) genConfig.temperature = values.temperature;
+        if (values.max_tokens != null) genConfig.maxOutputTokens = values.max_tokens;
+        if (Object.keys(genConfig).length > 0) payload.generationConfig = genConfig;
+      } else if (values.request_type === "chat") {
         payload.stream = Boolean(values.stream);
         payload.messages = [];
         if (values.system_prompt) {
@@ -96,7 +106,22 @@ export default function DebugPage() {
       };
 
       let response;
-      if (values.request_type === "chat" && values.stream) {
+      if (values.request_type === "gemini" && values.stream) {
+        const controller = new AbortController();
+        abortRef.current = controller;
+        response = await debugGeminiStreamGenerateContent(requestPayload, {
+          signal: controller.signal,
+          onUpdate: (update) => {
+            setStreamText(update.assistantText || "");
+            setStreamRaw(update.rawText || "");
+            setStreamUsage(update.usage || null);
+            setResultHeaders(update.headers || {});
+            setResultStatus(update.status || 0);
+          },
+        });
+      } else if (values.request_type === "gemini") {
+        response = await debugGeminiGenerateContent(requestPayload);
+      } else if (values.request_type === "chat" && values.stream) {
         const controller = new AbortController();
         abortRef.current = controller;
         response = await debugChatCompletionStream(requestPayload, {
@@ -148,6 +173,7 @@ export default function DebugPage() {
 
   const assistantMessage =
     streamText ||
+    result?.candidates?.[0]?.content?.parts?.[0]?.text ||
     result?.choices?.[0]?.message?.content ||
     result?.choices?.[0]?.delta?.content ||
     result?.error?.message ||
@@ -195,15 +221,15 @@ export default function DebugPage() {
               <Select disabled={Boolean(selectedProviderKeyID)} options={routeStrategyOptions} />
             </Form.Item>
 
-            <Form.Item label="System Prompt" name="system_prompt" hidden={requestType !== "chat"}>
+            <Form.Item label="System Prompt" name="system_prompt" hidden={requestType !== "chat" && requestType !== "gemini"}>
               <Input.TextArea rows={3} placeholder="可选的系统提示词" />
             </Form.Item>
 
-            <Form.Item label="流式返回" name="stream" valuePropName="checked" hidden={requestType !== "chat"} extra="开启后可测试网关的实时 SSE 转发能力。">
+            <Form.Item label="流式返回" name="stream" valuePropName="checked" hidden={requestType !== "chat" && requestType !== "gemini"} extra="开启后可测试网关的实时 SSE 转发能力。">
               <Switch />
             </Form.Item>
 
-            <Form.Item label="用户消息" name="user_message" hidden={requestType !== "chat"} rules={requestType === "chat" ? [{ required: true, message: "请输入用户消息" }] : []}>
+            <Form.Item label="用户消息" name="user_message" hidden={requestType !== "chat" && requestType !== "gemini"} rules={requestType === "chat" || requestType === "gemini" ? [{ required: true, message: "请输入用户消息" }] : []}>
               <Input.TextArea rows={6} placeholder="输入一段内容，用来验证路由行为是否符合预期" />
             </Form.Item>
 
@@ -211,7 +237,7 @@ export default function DebugPage() {
               <Input.TextArea rows={6} placeholder="待向量化的文本" />
             </Form.Item>
 
-            <Space size={16} wrap hidden={requestType !== "chat"}>
+            <Space size={16} wrap hidden={requestType !== "chat" && requestType !== "gemini"}>
               <Form.Item label="Temperature" name="temperature" style={{ minWidth: 180 }}>
                 <InputNumber min={0} max={2} step={0.1} style={{ width: "100%" }} />
               </Form.Item>
@@ -224,7 +250,7 @@ export default function DebugPage() {
               <Button type="primary" htmlType="submit" loading={submitting}>
                 发送调试请求
               </Button>
-              <Button danger onClick={stopStream} disabled={!submitting || !form.getFieldValue("stream") || requestType !== "chat"}>
+              <Button danger onClick={stopStream} disabled={!submitting || !form.getFieldValue("stream") || (requestType !== "chat" && requestType !== "gemini")}>
                 停止流式
               </Button>
               <Button
