@@ -40,7 +40,7 @@ type createProviderRequest struct {
 	Name         string          `json:"name" binding:"required"`
 	Slug         string          `json:"slug" binding:"required"`
 	ProviderType string          `json:"provider_type"`
-	BaseURL      string          `json:"base_url" binding:"required"`
+	BaseURL      string          `json:"base_url"` // vertexai 类型不需要
 	Status       string          `json:"status"`
 	Description  string          `json:"description"`
 	ExtraConfig  json.RawMessage `json:"extra_config"`
@@ -50,7 +50,7 @@ type updateProviderRequest struct {
 	Name         string          `json:"name" binding:"required"`
 	Slug         string          `json:"slug" binding:"required"`
 	ProviderType string          `json:"provider_type"`
-	BaseURL      string          `json:"base_url" binding:"required"`
+	BaseURL      string          `json:"base_url"` // vertexai 类型不需要
 	Status       string          `json:"status"`
 	Description  string          `json:"description"`
 	ExtraConfig  json.RawMessage `json:"extra_config"`
