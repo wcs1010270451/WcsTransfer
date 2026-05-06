@@ -12,7 +12,7 @@ const loadInitialValue = (key, fallback) => {
 };
 
 const useSettingsStore = create((set) => ({
-  apiBaseUrl: loadInitialValue("wcstransfer_api_base_url", envBaseUrl || "http://localhost:8080"),
+  apiBaseUrl: loadInitialValue("wcstransfer_api_base_url", envBaseUrl || "http://localhost:3210"),
   setApiBaseUrl: (value) => {
     const nextValue = value.trim();
     window.sessionStorage.setItem("wcstransfer_api_base_url", nextValue);

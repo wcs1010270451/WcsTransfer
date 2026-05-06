@@ -37,7 +37,7 @@ npm run preview  # preview the production build
 docker compose up -d --build
 ```
 
-Services: PostgreSQL on `localhost:5432`, Redis on `localhost:6379`, backend API on `http://localhost:8080`.
+Services: PostgreSQL on `localhost:5432`, Redis on `localhost:6379`, backend API on `http://localhost:3210`.
 
 ## Architecture
 

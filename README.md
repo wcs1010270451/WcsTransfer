@@ -29,7 +29,7 @@ Recommended local toolchain:
 Optional environment variables:
 
 - `APP_ENV=development`
-- `HTTP_PORT=8080`
+- `HTTP_PORT=3210`
 - `GIN_MODE=debug`
 - `ENABLE_DOCS=true`
 - `ENABLE_ADMIN_DEBUG=true`
@@ -105,7 +105,7 @@ Services:
 
 - PostgreSQL: `localhost:5432`
 - Redis: `localhost:6379`
-- Backend API: `http://localhost:8080`
+- Backend API: `http://localhost:3210`
 
 The first PostgreSQL startup automatically applies the backend migrations, including client API key and quota schemas in:
 
