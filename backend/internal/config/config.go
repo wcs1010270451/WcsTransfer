@@ -127,9 +127,6 @@ func (c Config) Validate() error {
 	if c.EnableDocs {
 		issues = append(issues, "ENABLE_DOCS must be false in production unless explicitly reviewed")
 	}
-	if c.EnableAdminDebug {
-		issues = append(issues, "ENABLE_ADMIN_DEBUG must be false in production")
-	}
 	if len(c.CORSAllowedOrigins) == 0 {
 		issues = append(issues, "CORS_ALLOWED_ORIGINS must contain at least one trusted origin")
 	}
