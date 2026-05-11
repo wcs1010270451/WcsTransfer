@@ -9,3 +9,4 @@ frontend/dist/
 .env.prod
 deploy/backup/restore-rehearsal.sql
 deploy/backup/restore-rehearsal.fixed.sql
+scripts/

@@ -15,6 +15,27 @@ sudo chmod 600 /secrets/gcp-credentials.json
 
 ---
 
+## 快捷脚本（推荐）
+
+脚本位于 `scripts/` 目录（不在 git 中，需手动上传到服务器）。
+
+首次使用先赋予执行权限：
+
+```bash
+chmod +x scripts/*.sh
+```
+
+| 脚本 | 说明 |
+|------|------|
+| `scripts/deploy.sh` | 拉取代码 + 全量重建 + 启动 |
+| `scripts/restart.sh` | 重启所有服务（不重建） |
+| `scripts/restart-svc.sh backend` | 重建并重启指定服务，附带实时日志 |
+| `scripts/migrate.sh` | 单独运行数据库迁移 |
+| `scripts/stop.sh` | 停止所有服务（保留容器） |
+| `scripts/stop.sh --down` | 停止并删除容器（数据卷保留） |
+
+---
+
 ## 首次部署
 
 ```bash
@@ -49,16 +70,15 @@ docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
 
 ---
 
-## 只重启 backend（不重新构建）
+## 只重建并重启某个服务
 
 ```bash
-docker compose -f docker-compose.prod.yml --env-file .env.prod restart backend
-```
+# 推荐用脚本
+scripts/restart-svc.sh backend
+scripts/restart-svc.sh frontend
 
-## 只重建并重启 backend
-
-```bash
-docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build backend
+# 或直接用 docker compose
+docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build <服务名>
 ```
 
 ---
