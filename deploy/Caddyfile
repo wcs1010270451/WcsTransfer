@@ -45,6 +45,10 @@
         reverse_proxy backend:8080
     }
 
+    handle /portal/* {
+        reverse_proxy backend:8080
+    }
+
     handle /console/* {
         basic_auth {
             {$ADMIN_UI_USER} {$ADMIN_UI_PASSWORD_HASH}
