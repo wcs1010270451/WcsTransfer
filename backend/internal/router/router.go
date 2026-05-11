@@ -1,7 +1,12 @@
 package router
 
 import (
+	"errors"
+	"net/http"
+	"strconv"
+
 	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5"
 
 	"wcstransfer/backend/internal/api/admin"
 	adminauthapi "wcstransfer/backend/internal/api/adminauth"
@@ -81,13 +86,43 @@ func New(cfg config.Config, deps *platform.Dependencies, stores *Stores) *gin.En
 		portalGroup.GET("/me", userHandler.Me)
 		portalGroup.GET("/models", userHandler.Models)
 		portalGroup.GET("/stats", userHandler.Stats)
+		portalGroup.GET("/stats/daily", userHandler.DailyStats)
 		portalGroup.GET("/wallet/ledger", userHandler.WalletLedger)
 		portalGroup.GET("/billing/export", userHandler.ExportBilling)
 		portalGroup.GET("/logs", userHandler.Logs)
 		portalGroup.GET("/logs/:id", userHandler.LogDetail)
 		portalGroup.GET("/client-keys", userHandler.ListClientKeys)
 		portalGroup.POST("/client-keys", userHandler.CreateClientKey)
+		portalGroup.GET("/client-keys/:id/model-stats", userHandler.ClientKeyModelStats)
+		portalGroup.PATCH("/client-keys/:id", userHandler.RenameClientKey)
 		portalGroup.POST("/client-keys/:id/disable", userHandler.DisableClientKey)
+		portalGroup.POST("/client-keys/:id/debug/chat/completions", func(c *gin.Context) {
+			claims, ok := middleware.UserClaimsFromContext(c)
+			if !ok {
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": gin.H{"message": "unauthorized", "type": "unauthorized"}})
+				return
+			}
+			keyID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+			if err != nil {
+				c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": "invalid key id", "type": "invalid_request"}})
+				return
+			}
+			key, err := resolvedStores.UserKeys.GetUserClientAPIKeyByID(c.Request.Context(), claims.Sub, keyID)
+			if err != nil {
+				status := http.StatusInternalServerError
+				if errors.Is(err, pgx.ErrNoRows) {
+					status = http.StatusNotFound
+				}
+				c.AbortWithStatusJSON(status, gin.H{"error": gin.H{"message": "key not found", "type": "not_found"}})
+				return
+			}
+			if key.Status != "active" {
+				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": gin.H{"message": "key is disabled", "type": "key_disabled"}})
+				return
+			}
+			middleware.SetClientAPIKeyInContext(c, key)
+			openAIHandler.ChatCompletions(c)
+		})
 	}
 
 	v1 := engine.Group("/v1")
@@ -119,7 +154,6 @@ func New(cfg config.Config, deps *platform.Dependencies, stores *Stores) *gin.En
 		adminGroup.GET("/users/:id/wallet/ledger", adminHandler.ListUserWalletLedger)
 		adminGroup.GET("/users/:id/billing/export", adminHandler.ExportUserBilling)
 		adminGroup.GET("/client-keys", adminHandler.ListClientAPIKeys)
-		adminGroup.POST("/client-keys", adminHandler.CreateClientAPIKey)
 		adminGroup.PUT("/client-keys/:id", adminHandler.UpdateClientAPIKey)
 		adminGroup.GET("/keys", adminHandler.ListProviderKeys)
 		adminGroup.POST("/keys", adminHandler.CreateProviderKey)

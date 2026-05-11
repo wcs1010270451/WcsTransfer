@@ -170,6 +170,73 @@ func (h *Handler) CreateClientKey(c *gin.Context) {
 	c.JSON(http.StatusCreated, item)
 }
 
+type renameClientKeyRequest struct {
+	Name string `json:"name" binding:"required"`
+}
+
+func (h *Handler) ClientKeyModelStats(c *gin.Context) {
+	if h.keyStore == nil {
+		writeError(c, http.StatusServiceUnavailable, "service_unavailable", "user key store is not configured")
+		return
+	}
+
+	claims, ok := middleware.UserClaimsFromContext(c)
+	if !ok {
+		writeError(c, http.StatusUnauthorized, "auth_error", "unauthorized")
+		return
+	}
+
+	id, err := parseResourceID(c.Param("id"))
+	if err != nil {
+		writeError(c, http.StatusBadRequest, "invalid_request", "invalid key id")
+		return
+	}
+
+	items, err := h.keyStore.GetUserClientKeyModelStats(c.Request.Context(), claims.Sub, id)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "database_error", err.Error())
+		return
+	}
+
+	if items == nil {
+		items = []entity.KeyModelUsageStat{}
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items})
+}
+
+func (h *Handler) RenameClientKey(c *gin.Context) {
+	if h.keyStore == nil {
+		writeError(c, http.StatusServiceUnavailable, "service_unavailable", "user key store is not configured")
+		return
+	}
+
+	claims, ok := middleware.UserClaimsFromContext(c)
+	if !ok {
+		writeError(c, http.StatusUnauthorized, "auth_error", "unauthorized")
+		return
+	}
+
+	id, err := parseResourceID(c.Param("id"))
+	if err != nil {
+		writeError(c, http.StatusBadRequest, "invalid_request", "invalid key id")
+		return
+	}
+
+	var req renameClientKeyRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writeError(c, http.StatusBadRequest, "invalid_request", "name is required")
+		return
+	}
+
+	item, err := h.keyStore.RenameUserClientAPIKey(c.Request.Context(), claims.Sub, id, strings.TrimSpace(req.Name))
+	if err != nil {
+		writeError(c, http.StatusBadRequest, "update_failed", err.Error())
+		return
+	}
+
+	c.JSON(http.StatusOK, item)
+}
+
 func (h *Handler) DisableClientKey(c *gin.Context) {
 	if h.keyStore == nil {
 		writeError(c, http.StatusServiceUnavailable, "service_unavailable", "user key store is not configured")
@@ -234,6 +301,63 @@ func (h *Handler) Stats(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, stats)
+}
+
+func (h *Handler) DailyStats(c *gin.Context) {
+	if h.keyStore == nil {
+		writeError(c, http.StatusServiceUnavailable, "service_unavailable", "user key store is not configured")
+		return
+	}
+
+	claims, ok := middleware.UserClaimsFromContext(c)
+	if !ok {
+		writeError(c, http.StatusUnauthorized, "auth_error", "unauthorized")
+		return
+	}
+
+	now := time.Now().UTC()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+
+	var from, to time.Time
+	fromStr := strings.TrimSpace(c.Query("from"))
+	toStr := strings.TrimSpace(c.Query("to"))
+
+	if fromStr != "" && toStr != "" {
+		parsedFrom, err := time.Parse("2006-01-02", fromStr)
+		if err != nil {
+			writeError(c, http.StatusBadRequest, "invalid_request", "from must be YYYY-MM-DD")
+			return
+		}
+		parsedTo, err := time.Parse("2006-01-02", toStr)
+		if err != nil {
+			writeError(c, http.StatusBadRequest, "invalid_request", "to must be YYYY-MM-DD")
+			return
+		}
+		from = parsedFrom.UTC()
+		to = parsedTo.UTC().AddDate(0, 0, 1)
+		if from.After(to) {
+			writeError(c, http.StatusBadRequest, "invalid_request", "from must be before to")
+			return
+		}
+		if to.Sub(from) > 93*24*time.Hour {
+			writeError(c, http.StatusBadRequest, "invalid_request", "date range cannot exceed 3 months")
+			return
+		}
+	} else {
+		from = today.AddDate(0, 0, -29)
+		to = today.AddDate(0, 0, 1)
+	}
+
+	points, err := h.keyStore.GetUserPortalDailyStats(c.Request.Context(), claims.Sub, from, to)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "database_error", err.Error())
+		return
+	}
+
+	if points == nil {
+		points = []entity.DailyStatPoint{}
+	}
+	c.JSON(http.StatusOK, gin.H{"items": points})
 }
 
 func (h *Handler) WalletLedger(c *gin.Context) {
@@ -401,9 +525,15 @@ func (h *Handler) Logs(c *gin.Context) {
 		success = &parsed
 	}
 
+	clientAPIKeyID, ok := parseNonNegativeIntQuery(c, "client_api_key_id")
+	if !ok {
+		return
+	}
+
 	result, err := h.keyStore.ListUserRequestLogs(c.Request.Context(), claims.Sub, entity.ListRequestLogsInput{
-		Page:            page,
-		PageSize:        pageSize,
+		Page:           page,
+		PageSize:       pageSize,
+		ClientAPIKeyID: int64(clientAPIKeyID),
 		ModelPublicName: strings.TrimSpace(c.Query("model_public_name")),
 		Success:         success,
 		HTTPStatus:      httpStatus,

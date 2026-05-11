@@ -375,6 +375,7 @@ SELECT cak.id, cak.name, cak.masked_key, cak.status, cak.description,
        cak.daily_cost_limit::float8, cak.monthly_cost_limit::float8, cak.warning_threshold::float8,
        COALESCE(model_access.allowed_model_ids, ARRAY[]::bigint[]),
        COALESCE(model_access.allowed_models, ARRAY[]::text[]),
+       COALESCE(total_usage.total_cost_used, 0)::float8,
        COALESCE(daily_usage.daily_cost_used, 0)::float8,
        COALESCE(monthly_usage.monthly_cost_used, 0)::float8,
        cak.expires_at, cak.last_used_at, cak.last_error_at, cak.last_error_message, cak.created_at, cak.updated_at
@@ -388,6 +389,11 @@ LEFT JOIN LATERAL (
     JOIN models m ON m.id = cam.model_id
     WHERE cam.client_api_key_id = cak.id
 ) model_access ON TRUE
+LEFT JOIN LATERAL (
+    SELECT COALESCE(SUM(billable_amount), 0) AS total_cost_used
+    FROM request_logs
+    WHERE client_api_key_id = cak.id
+) total_usage ON TRUE
 LEFT JOIN LATERAL (
     SELECT COALESCE(SUM(billable_amount), 0) AS daily_cost_used
     FROM request_logs
@@ -1037,6 +1043,7 @@ SELECT uk.id, uk.name, uk.masked_key, uk.status, uk.description,
        uk.daily_cost_limit::float8, uk.monthly_cost_limit::float8, uk.warning_threshold::float8,
        COALESCE(model_access.allowed_model_ids, ARRAY[]::bigint[]),
        COALESCE(model_access.allowed_models, ARRAY[]::text[]),
+       0::float8,
        COALESCE(daily_usage.daily_cost_used, 0)::float8,
        COALESCE(monthly_usage.monthly_cost_used, 0)::float8,
        uk.expires_at, uk.last_used_at, uk.last_error_at, uk.last_error_message, uk.created_at, uk.updated_at
@@ -1720,8 +1727,7 @@ func scanClientAPIKey(scanner interface {
 	Scan(dest ...any) error
 }) (entity.ClientAPIKey, error) {
 	var item entity.ClientAPIKey
-	var dailyCostUsed float64
-	var monthlyCostUsed float64
+	var totalCostUsed, dailyCostUsed, monthlyCostUsed float64
 	if err := scanner.Scan(
 		&item.ID,
 		&item.Name,
@@ -1740,6 +1746,7 @@ func scanClientAPIKey(scanner interface {
 		&item.WarningThreshold,
 		&item.AllowedModelIDs,
 		&item.AllowedModels,
+		&totalCostUsed,
 		&dailyCostUsed,
 		&monthlyCostUsed,
 		&item.ExpiresAt,
@@ -1752,7 +1759,7 @@ func scanClientAPIKey(scanner interface {
 		return entity.ClientAPIKey{}, fmt.Errorf("scan client api key: %w", err)
 	}
 
-	item.CostUsage = buildClientCostUsage(item, dailyCostUsed, monthlyCostUsed)
+	item.CostUsage = buildClientCostUsage(item, totalCostUsed, dailyCostUsed, monthlyCostUsed)
 	return item, nil
 }
 
@@ -1764,6 +1771,7 @@ SELECT cak.id, cak.name, cak.masked_key, cak.status, cak.description,
        cak.daily_cost_limit::float8, cak.monthly_cost_limit::float8, cak.warning_threshold::float8,
        COALESCE(model_access.allowed_model_ids, ARRAY[]::bigint[]),
        COALESCE(model_access.allowed_models, ARRAY[]::text[]),
+       COALESCE(total_usage.total_cost_used, 0)::float8,
        COALESCE(daily_usage.daily_cost_used, 0)::float8,
        COALESCE(monthly_usage.monthly_cost_used, 0)::float8,
        cak.expires_at, cak.last_used_at, cak.last_error_at, cak.last_error_message, cak.created_at, cak.updated_at
@@ -1778,6 +1786,11 @@ LEFT JOIN LATERAL (
     WHERE cam.client_api_key_id = cak.id
 ) model_access ON TRUE
 LEFT JOIN LATERAL (
+    SELECT COALESCE(SUM(billable_amount), 0) AS total_cost_used
+    FROM request_logs
+    WHERE client_api_key_id = cak.id
+) total_usage ON TRUE
+LEFT JOIN LATERAL (
     SELECT COALESCE(SUM(billable_amount), 0) AS daily_cost_used
     FROM request_logs
     WHERE client_api_key_id = cak.id
@@ -1786,7 +1799,7 @@ LEFT JOIN LATERAL (
 LEFT JOIN LATERAL (
     SELECT COALESCE(SUM(billable_amount), 0) AS monthly_cost_used
     FROM request_logs
-WHERE client_api_key_id = cak.id
+    WHERE client_api_key_id = cak.id
       AND created_at >= date_trunc('month', NOW())
 ) monthly_usage ON TRUE
 WHERE cak.id = $1`
@@ -1835,12 +1848,13 @@ func normalizeInt64IDs(values []int64) []int64 {
 	return items
 }
 
-func buildClientCostUsage(item entity.ClientAPIKey, dailyCostUsed float64, monthlyCostUsed float64) *entity.ClientCostUsage {
+func buildClientCostUsage(item entity.ClientAPIKey, totalCostUsed, dailyCostUsed float64, monthlyCostUsed float64) *entity.ClientCostUsage {
 	now := time.Now().UTC()
 	dailyResetAt := nextDayUTC(now)
 	monthlyResetAt := time.Date(now.Year(), now.Month()+1, 1, 0, 0, 0, 0, time.UTC)
 
 	usage := &entity.ClientCostUsage{
+		TotalCostUsed:   totalCostUsed,
 		DailyCostUsed:   dailyCostUsed,
 		MonthlyCostUsed: monthlyCostUsed,
 		DailyResetAt:    &dailyResetAt,
@@ -1970,6 +1984,9 @@ func buildRequestLogFilters(input entity.ListRequestLogsInput) (string, []any) {
 	}
 	if input.ProviderID > 0 {
 		clauses = append(clauses, "rl.provider_id = "+nextArg(input.ProviderID))
+	}
+	if input.ClientAPIKeyID > 0 {
+		clauses = append(clauses, "rl.client_api_key_id = "+nextArg(input.ClientAPIKeyID))
 	}
 	if strings.TrimSpace(input.ModelPublicName) != "" {
 		clauses = append(clauses, "rl.model_public_name = "+nextArg(strings.TrimSpace(input.ModelPublicName)))
@@ -2110,6 +2127,7 @@ SELECT cak.id, cak.name, cak.masked_key, cak.status, cak.description,
        cak.daily_cost_limit::float8, cak.monthly_cost_limit::float8, cak.warning_threshold::float8,
        COALESCE(model_access.allowed_model_ids, ARRAY[]::bigint[]),
        COALESCE(model_access.allowed_models, ARRAY[]::text[]),
+       COALESCE(total_usage.total_cost_used, 0)::float8,
        COALESCE(daily_usage.daily_cost_used, 0)::float8,
        COALESCE(monthly_usage.monthly_cost_used, 0)::float8,
        cak.expires_at, cak.last_used_at, cak.last_error_at, cak.last_error_message, cak.created_at, cak.updated_at
@@ -2122,6 +2140,11 @@ LEFT JOIN LATERAL (
     JOIN models m ON m.id = cam.model_id
     WHERE cam.client_api_key_id = cak.id
 ) model_access ON TRUE
+LEFT JOIN LATERAL (
+    SELECT COALESCE(SUM(billable_amount), 0) AS total_cost_used
+    FROM request_logs
+    WHERE client_api_key_id = cak.id
+) total_usage ON TRUE
 LEFT JOIN LATERAL (
     SELECT COALESCE(SUM(billable_amount), 0) AS daily_cost_used
     FROM request_logs
@@ -2168,6 +2191,59 @@ RETURNING id`, id, userID).Scan(&clientKeyID); err != nil {
 		return entity.ClientAPIKey{}, fmt.Errorf("disable user client api key: %w", err)
 	}
 	return s.getClientAPIKeyByID(ctx, clientKeyID)
+}
+
+func (s *Store) GetUserClientKeyModelStats(ctx context.Context, userID int64, keyID int64) ([]entity.KeyModelUsageStat, error) {
+	const query = `
+SELECT rl.model_public_name,
+       COUNT(*)::bigint AS request_count,
+       COALESCE(SUM(rl.prompt_tokens), 0)::bigint AS prompt_tokens,
+       COALESCE(SUM(rl.completion_tokens), 0)::bigint AS completion_tokens,
+       COALESCE(SUM(rl.total_tokens), 0)::bigint AS total_tokens,
+       COALESCE(SUM(rl.billable_amount), 0)::float8 AS billable_amount
+FROM request_logs rl
+JOIN client_api_keys cak ON cak.id = rl.client_api_key_id
+WHERE cak.id = $1 AND cak.user_id = $2
+GROUP BY rl.model_public_name
+ORDER BY SUM(rl.total_tokens) DESC`
+
+	rows, err := s.pool.Query(ctx, query, keyID, userID)
+	if err != nil {
+		return nil, fmt.Errorf("query key model stats: %w", err)
+	}
+	defer rows.Close()
+
+	var items []entity.KeyModelUsageStat
+	for rows.Next() {
+		var item entity.KeyModelUsageStat
+		if err := rows.Scan(&item.ModelPublicName, &item.RequestCount, &item.PromptTokens, &item.CompletionTokens, &item.TotalTokens, &item.BillableAmount); err != nil {
+			return nil, fmt.Errorf("scan key model stat: %w", err)
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *Store) RenameUserClientAPIKey(ctx context.Context, userID int64, id int64, name string) (entity.ClientAPIKey, error) {
+	var clientKeyID int64
+	if err := s.pool.QueryRow(ctx, `
+UPDATE client_api_keys SET name = $3
+WHERE id = $1 AND user_id = $2
+RETURNING id`, id, userID, name).Scan(&clientKeyID); err != nil {
+		return entity.ClientAPIKey{}, fmt.Errorf("rename user client api key: %w", err)
+	}
+	return s.getClientAPIKeyByID(ctx, clientKeyID)
+}
+
+func (s *Store) GetUserClientAPIKeyByID(ctx context.Context, userID int64, id int64) (entity.ClientAPIKey, error) {
+	item, err := s.getClientAPIKeyByID(ctx, id)
+	if err != nil {
+		return entity.ClientAPIKey{}, fmt.Errorf("get user client api key: %w", err)
+	}
+	if item.UserID != userID {
+		return entity.ClientAPIKey{}, pgx.ErrNoRows
+	}
+	return item, nil
 }
 
 func (s *Store) GetUserPortalStats(ctx context.Context, userID int64) (entity.UserPortalStats, error) {
@@ -2233,6 +2309,50 @@ CROSS JOIN wallet w`
 		stats.SuccessRate = float64(stats.SuccessCount) * 100 / float64(stats.RequestCount)
 	}
 	return stats, nil
+}
+
+func (s *Store) GetUserPortalDailyStats(ctx context.Context, userID int64, from, to time.Time) ([]entity.DailyStatPoint, error) {
+	const query = `
+SELECT
+    to_char(d.day, 'YYYY-MM-DD') AS date,
+    COALESCE(s.request_count, 0)::bigint,
+    COALESCE(s.prompt_tokens, 0)::bigint,
+    COALESCE(s.completion_tokens, 0)::bigint,
+    COALESCE(s.total_tokens, 0)::bigint,
+    COALESCE(s.billable_amount, 0)::float8
+FROM generate_series($2::date, ($3::date - interval '1 day')::date, '1 day'::interval) AS d(day)
+LEFT JOIN (
+    SELECT
+        date_trunc('day', rl.created_at)::date AS day,
+        COUNT(*)::bigint AS request_count,
+        COALESCE(SUM(rl.prompt_tokens), 0)::bigint AS prompt_tokens,
+        COALESCE(SUM(rl.completion_tokens), 0)::bigint AS completion_tokens,
+        COALESCE(SUM(rl.total_tokens), 0)::bigint AS total_tokens,
+        COALESCE(SUM(rl.billable_amount), 0)::float8 AS billable_amount
+    FROM request_logs rl
+    JOIN client_api_keys cak ON cak.id = rl.client_api_key_id
+    WHERE cak.user_id = $1
+      AND rl.created_at >= $2
+      AND rl.created_at < $3
+    GROUP BY date_trunc('day', rl.created_at)::date
+) s ON s.day = d.day
+ORDER BY d.day`
+
+	rows, err := s.pool.Query(ctx, query, userID, from, to)
+	if err != nil {
+		return nil, fmt.Errorf("query user portal daily stats: %w", err)
+	}
+	defer rows.Close()
+
+	var points []entity.DailyStatPoint
+	for rows.Next() {
+		var p entity.DailyStatPoint
+		if err := rows.Scan(&p.Date, &p.RequestCount, &p.PromptTokens, &p.CompletionTokens, &p.TotalTokens, &p.BillableAmount); err != nil {
+			return nil, fmt.Errorf("scan daily stat point: %w", err)
+		}
+		points = append(points, p)
+	}
+	return points, rows.Err()
 }
 
 func (s *Store) ListUserRequestLogs(ctx context.Context, userID int64, input entity.ListRequestLogsInput) (entity.RequestLogPage, error) {

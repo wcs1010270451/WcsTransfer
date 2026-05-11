@@ -232,6 +232,7 @@ type ClientQuotaUsage struct {
 }
 
 type ClientCostUsage struct {
+	TotalCostUsed           float64    `json:"total_cost_used"`
 	DailyCostUsed           float64    `json:"daily_cost_used"`
 	MonthlyCostUsed         float64    `json:"monthly_cost_used"`
 	DailyCostRemaining      float64    `json:"daily_cost_remaining"`
@@ -282,16 +283,17 @@ type RequestLogDetail struct {
 }
 
 type ListRequestLogsInput struct {
-	Page            int
-	PageSize        int
-	UserID          int64
-	ProviderID      int64
-	ModelPublicName string
-	Success         *bool
-	HTTPStatus      int
-	TraceID         string
-	CreatedFrom     *time.Time
-	CreatedTo       *time.Time
+	Page             int
+	PageSize         int
+	UserID           int64
+	ProviderID       int64
+	ClientAPIKeyID   int64
+	ModelPublicName  string
+	Success          *bool
+	HTTPStatus       int
+	TraceID          string
+	CreatedFrom      *time.Time
+	CreatedTo        *time.Time
 }
 
 type RequestLogPage struct {
@@ -319,6 +321,24 @@ type UserPortalStats struct {
 	ClientKeyCount   int64   `json:"client_key_count"`
 	ActiveClientKeys int64   `json:"active_client_keys"`
 	WalletBalance    float64 `json:"wallet_balance"`
+}
+
+type KeyModelUsageStat struct {
+	ModelPublicName  string  `json:"model_public_name"`
+	RequestCount     int64   `json:"request_count"`
+	PromptTokens     int64   `json:"prompt_tokens"`
+	CompletionTokens int64   `json:"completion_tokens"`
+	TotalTokens      int64   `json:"total_tokens"`
+	BillableAmount   float64 `json:"billable_amount"`
+}
+
+type DailyStatPoint struct {
+	Date             string  `json:"date"`
+	RequestCount     int64   `json:"request_count"`
+	PromptTokens     int64   `json:"prompt_tokens"`
+	CompletionTokens int64   `json:"completion_tokens"`
+	TotalTokens      int64   `json:"total_tokens"`
+	BillableAmount   float64 `json:"billable_amount"`
 }
 
 type DashboardStats struct {

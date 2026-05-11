@@ -1,5 +1,6 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import AppLayout from "./layouts/AppLayout";
+import PortalLayout from "./layouts/PortalLayout";
 import LandingPage from "./pages/LandingPage";
 import DashboardPage from "./pages/DashboardPage";
 import ProvidersPage from "./pages/ProvidersPage";
@@ -12,6 +13,9 @@ import ApiDocsPage from "./pages/ApiDocsPage";
 import UsersPage from "./pages/UsersPage";
 import PortalAuthPage from "./pages/PortalAuthPage";
 import PortalKeysPage from "./pages/PortalKeysPage";
+import PortalKeyDetailPage from "./pages/PortalKeyDetailPage";
+import PortalDashboardPage from "./pages/PortalDashboardPage";
+import PortalProfilePage from "./pages/PortalProfilePage";
 import AdminAuthPage from "./pages/AdminAuthPage";
 import usePortalAuthStore from "./store/portalAuthStore";
 import useAdminAuthStore from "./store/adminAuthStore";
@@ -39,13 +43,19 @@ export default function App() {
       <Route path="/admin/login" element={<AdminAuthPage />} />
       <Route path="/portal/login" element={<PortalAuthPage />} />
       <Route
-        path="/portal/keys"
+        path="/portal"
         element={
           <PortalGuard>
-            <PortalKeysPage />
+            <PortalLayout />
           </PortalGuard>
         }
-      />
+      >
+        <Route index element={<Navigate to="/portal/dashboard" replace />} />
+        <Route path="dashboard" element={<PortalDashboardPage />} />
+        <Route path="keys" element={<PortalKeysPage />} />
+        <Route path="keys/:id" element={<PortalKeyDetailPage />} />
+        <Route path="profile" element={<PortalProfilePage />} />
+      </Route>
       <Route
         element={
           <AdminGuard>

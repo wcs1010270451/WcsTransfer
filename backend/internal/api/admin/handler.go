@@ -81,19 +81,6 @@ type correctUserWalletRequest struct {
 	Note   string  `json:"note" binding:"required"`
 }
 
-type createClientAPIKeyRequest struct {
-	Name              string  `json:"name" binding:"required"`
-	Status            string  `json:"status"`
-	Description       string  `json:"description"`
-	RPMLimit          int     `json:"rpm_limit"`
-	DailyRequestLimit int     `json:"daily_request_limit"`
-	DailyTokenLimit   int     `json:"daily_token_limit"`
-	DailyCostLimit    float64 `json:"daily_cost_limit"`
-	MonthlyCostLimit  float64 `json:"monthly_cost_limit"`
-	WarningThreshold  float64 `json:"warning_threshold"`
-	AllowedModelIDs   []int64 `json:"allowed_model_ids"`
-	ExpiresAt         *string `json:"expires_at"`
-}
 
 type updateClientAPIKeyRequest struct {
 	Name              string  `json:"name" binding:"required"`
@@ -623,58 +610,6 @@ func (h *Handler) ListClientAPIKeys(c *gin.Context) {
 	})
 }
 
-func (h *Handler) CreateClientAPIKey(c *gin.Context) {
-	if h.store == nil {
-		writeServiceUnavailable(c)
-		return
-	}
-
-	var request createClientAPIKeyRequest
-	if err := c.ShouldBindJSON(&request); err != nil {
-		writeBadRequest(c, "invalid request body")
-		return
-	}
-
-	expiresAt, ok := parseOptionalTime(request.ExpiresAt)
-	if !ok {
-		writeBadRequest(c, "expires_at must be an RFC3339 datetime")
-		return
-	}
-
-	input := entity.CreateClientAPIKeyInput{
-		Name:              strings.TrimSpace(request.Name),
-		Status:            defaultString(request.Status, "active"),
-		Description:       strings.TrimSpace(request.Description),
-		RPMLimit:          request.RPMLimit,
-		DailyRequestLimit: request.DailyRequestLimit,
-		DailyTokenLimit:   request.DailyTokenLimit,
-		DailyCostLimit:    request.DailyCostLimit,
-		MonthlyCostLimit:  request.MonthlyCostLimit,
-		WarningThreshold:  defaultFloat64(request.WarningThreshold, 80),
-		AllowedModelIDs:   normalizeInt64Slice(request.AllowedModelIDs),
-		ExpiresAt:         expiresAt,
-	}
-	if input.Name == "" {
-		writeBadRequest(c, "name is required")
-		return
-	}
-
-	item, err := h.store.CreateClientAPIKey(c.Request.Context(), input)
-	if err != nil {
-		writeDatabaseError(c, err)
-		return
-	}
-
-	h.recordAdminAction(c, "client_key.create", "client_api_key", item.ID, item.Name, gin.H{
-		"user_id":            item.UserID,
-		"status":             item.Status,
-		"allowed_model_ids":  item.AllowedModelIDs,
-		"daily_cost_limit":   item.DailyCostLimit,
-		"monthly_cost_limit": item.MonthlyCostLimit,
-	})
-
-	c.JSON(http.StatusCreated, item)
-}
 
 func (h *Handler) UpdateClientAPIKey(c *gin.Context) {
 	if h.store == nil {

@@ -126,3 +126,7 @@ func ClientAPIKeyFromContext(c *gin.Context) (entity.ClientAPIKey, bool) {
 	clientKey, valid := value.(entity.ClientAPIKey)
 	return clientKey, valid
 }
+
+func SetClientAPIKeyInContext(c *gin.Context, key entity.ClientAPIKey) {
+	c.Set(clientAPIKeyContextKey, key)
+}

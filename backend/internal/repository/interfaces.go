@@ -53,12 +53,16 @@ type UserClientKeyStore interface {
 	ListUserClientAPIKeys(ctx context.Context, userID int64) ([]entity.ClientAPIKey, error)
 	CreateUserClientAPIKey(ctx context.Context, input entity.CreateClientAPIKeyInput) (entity.ClientAPIKey, error)
 	DisableUserClientAPIKey(ctx context.Context, userID int64, id int64) (entity.ClientAPIKey, error)
+	RenameUserClientAPIKey(ctx context.Context, userID int64, id int64, name string) (entity.ClientAPIKey, error)
 	GetUserPortalStats(ctx context.Context, userID int64) (entity.UserPortalStats, error)
 	ListUserWalletLedger(ctx context.Context, userID int64, page int, pageSize int) (entity.WalletLedgerPage, error)
 	ListUserRequestLogs(ctx context.Context, userID int64, input entity.ListRequestLogsInput) (entity.RequestLogPage, error)
 	GetUserRequestLog(ctx context.Context, userID int64, id int64) (entity.RequestLogDetail, error)
 	ExportUserRequestLogs(ctx context.Context, userID int64, input entity.ListRequestLogsInput) ([]entity.RequestLog, error)
 	ListModels(ctx context.Context) ([]entity.Model, error)
+	GetUserPortalDailyStats(ctx context.Context, userID int64, from, to time.Time) ([]entity.DailyStatPoint, error)
+	GetUserClientKeyModelStats(ctx context.Context, userID int64, keyID int64) ([]entity.KeyModelUsageStat, error)
+	GetUserClientAPIKeyByID(ctx context.Context, userID int64, id int64) (entity.ClientAPIKey, error)
 }
 
 type RequestLogWriter interface {

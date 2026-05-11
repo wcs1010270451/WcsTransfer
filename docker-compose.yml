@@ -25,6 +25,9 @@ services:
       - ./backend/migrations/0013_reserved_amount_tracking.up.sql:/docker-entrypoint-initdb.d/0013_reserved_amount_tracking.sql:ro
       - ./backend/migrations/0014_model_reserve_policy.up.sql:/docker-entrypoint-initdb.d/0014_model_reserve_policy.sql:ro
       - ./backend/migrations/0015_admin_action_logs.up.sql:/docker-entrypoint-initdb.d/0015_admin_action_logs.sql:ro
+      - ./backend/migrations/0016_add_gemini_provider_type.up.sql:/docker-entrypoint-initdb.d/0016_add_gemini_provider_type.sql:ro
+      - ./backend/migrations/0017_remove_tenant_layer.up.sql:/docker-entrypoint-initdb.d/0017_remove_tenant_layer.sql:ro
+      - ./backend/migrations/0018_add_vertexai_provider_type.up.sql:/docker-entrypoint-initdb.d/0018_add_vertexai_provider_type.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-wcstransfer} -d ${POSTGRES_DB:-wcstransfer}"]
       interval: 5s

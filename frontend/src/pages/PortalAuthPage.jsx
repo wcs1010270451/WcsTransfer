@@ -13,7 +13,7 @@ export default function PortalAuthPage() {
       const result = await loginPortalUser(values);
       setSession({ token: result.token, user: result.user });
       message.success("登录成功");
-      navigate("/portal/keys", { replace: true });
+      navigate("/portal/dashboard", { replace: true });
     } catch (error) {
       message.error(error.response?.data?.error?.message || error.message || "登录失败");
     }

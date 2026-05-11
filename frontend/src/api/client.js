@@ -510,6 +510,11 @@ export const fetchPortalStats = async () => {
   return response.data;
 };
 
+export const fetchPortalDailyStats = async (params = {}) => {
+  const response = await createPortalClient().get("/portal/stats/daily", { params });
+  return response.data;
+};
+
 export const fetchPortalWalletLedger = async (params = { page: 1, page_size: 20 }) => {
   const response = await createPortalClient().get("/portal/wallet/ledger", { params });
   return response.data;
@@ -546,6 +551,106 @@ export const createPortalClientKey = async (payload) => {
 export const disablePortalClientKey = async (id) => {
   const response = await createPortalClient().post(`/portal/client-keys/${id}/disable`);
   return response.data;
+};
+
+export const renamePortalClientKey = async (id, name) => {
+  const response = await createPortalClient().patch(`/portal/client-keys/${id}`, { name });
+  return response.data;
+};
+
+export const fetchPortalKeyModelStats = async (id) => {
+  const response = await createPortalClient().get(`/portal/client-keys/${id}/model-stats`);
+  return response.data;
+};
+
+export const sendPortalDebugChat = async (keyId, payload, options = {}) => {
+  const { apiBaseUrl } = useSettingsStore.getState();
+  const { token } = usePortalAuthStore.getState();
+  const reqHeaders = { "Content-Type": "application/json" };
+  if (token) reqHeaders.Authorization = `Bearer ${token}`;
+
+  const response = await fetch(`${apiBaseUrl}/portal/client-keys/${keyId}/debug/chat/completions`, {
+    method: "POST",
+    headers: reqHeaders,
+    body: JSON.stringify(payload),
+    signal: options.signal,
+  });
+
+  const respHeaders = Object.fromEntries(response.headers.entries());
+  const contentType = response.headers.get("content-type") || "";
+
+  if (!contentType.toLowerCase().includes("text/event-stream")) {
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const error = new Error(data?.error?.message || `Request failed with status ${response.status}`);
+      error.response = { data, headers: respHeaders, status: response.status };
+      throw error;
+    }
+    return {
+      data,
+      headers: respHeaders,
+      status: response.status,
+      assistantText: data?.choices?.[0]?.message?.content || "",
+      rawText: JSON.stringify(data, null, 2),
+      usage: data?.usage || null,
+    };
+  }
+
+  const reader = response.body?.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let rawText = "";
+  let assistantText = "";
+  let usage = null;
+
+  const flushEvent = (eventText) => {
+    for (const line of eventText.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("data:")) continue;
+      const payloadText = trimmed.slice(5).trim();
+      if (!payloadText || payloadText === "[DONE]") continue;
+      try {
+        const parsed = JSON.parse(payloadText);
+        const content = parsed?.choices?.[0]?.delta?.content;
+        if (typeof content === "string") assistantText += content;
+        if (parsed?.usage) usage = parsed.usage;
+        options.onUpdate?.({ assistantText, rawText, usage, headers: respHeaders, status: response.status });
+      } catch {}
+    }
+  };
+
+  while (reader) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    const chunkText = decoder.decode(value, { stream: true });
+    rawText += chunkText;
+    buffer += chunkText;
+    let sep = buffer.indexOf("\n\n");
+    while (sep >= 0) {
+      flushEvent(buffer.slice(0, sep));
+      buffer = buffer.slice(sep + 2);
+      sep = buffer.indexOf("\n\n");
+    }
+  }
+
+  const tail = decoder.decode();
+  if (tail) { rawText += tail; buffer += tail; }
+  if (buffer.trim()) flushEvent(buffer);
+
+  if (!response.ok) {
+    const error = new Error(`Request failed with status ${response.status}`);
+    error.response = { data: { error: { message: error.message } }, headers: respHeaders, status: response.status };
+    throw error;
+  }
+
+  return {
+    data: { stream: true, assistant_text: assistantText, usage },
+    headers: respHeaders,
+    status: response.status,
+    assistantText,
+    rawText,
+    usage,
+  };
 };
 
 export const debugGeminiGenerateContent = async (payload) => {
