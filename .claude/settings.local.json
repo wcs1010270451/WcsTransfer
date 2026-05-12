@@ -5,7 +5,10 @@
       "Bash(grep -E \"\\\\.go$\")",
       "Bash(go build *)",
       "Bash(npm install *)",
-      "Bash(go vet *)"
+      "Bash(go vet *)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(echo \"exit:$?\")",
+      "Bash(go test *)"
     ]
   }
 }

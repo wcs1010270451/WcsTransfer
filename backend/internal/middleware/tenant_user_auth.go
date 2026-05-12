@@ -1,11 +1,11 @@
 package middleware
 
 import (
-	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 
+	"wcstransfer/backend/internal/apierror"
 	"wcstransfer/backend/internal/service/userauth"
 )
 
@@ -14,25 +14,19 @@ const userClaimsContextKey = "user_claims"
 func TenantUserAuth(auth *userauth.Service) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if auth == nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-				"error": gin.H{"message": "user auth is not configured", "type": "auth_error"},
-			})
+			apierror.Abort(c, apierror.CodeServiceError, "user auth is not configured")
 			return
 		}
 
 		token := strings.TrimSpace(strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer "))
 		if token == "" {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-				"error": gin.H{"message": "unauthorized", "type": "auth_error"},
-			})
+			apierror.Abort(c, apierror.CodeUnauthorized, "unauthorized")
 			return
 		}
 
 		claims, err := auth.ParseToken(token)
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-				"error": gin.H{"message": "unauthorized", "type": "auth_error"},
-			})
+			apierror.Abort(c, apierror.CodeUnauthorized, "unauthorized")
 			return
 		}
 

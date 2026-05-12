@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"wcstransfer/backend/internal/apierror"
 	"wcstransfer/backend/internal/entity"
 	"wcstransfer/backend/internal/repository"
 	adminauthsvc "wcstransfer/backend/internal/service/adminauth"
@@ -1094,12 +1095,7 @@ func (h *Handler) GetLogDetail(c *gin.Context) {
 	item, err := h.store.GetRequestLog(c.Request.Context(), id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			c.JSON(http.StatusNotFound, gin.H{
-				"error": gin.H{
-					"message": "request log not found",
-					"type":    "not_found",
-				},
-			})
+			apierror.Write(c, apierror.CodeNotFound, "request log not found")
 			return
 		}
 		writeDatabaseError(c, err)
@@ -1274,21 +1270,11 @@ func buildBudgetPressure(items []entity.ClientAPIKey, limit int) []entity.Client
 }
 
 func writeBadRequest(c *gin.Context, message string) {
-	c.JSON(http.StatusBadRequest, gin.H{
-		"error": gin.H{
-			"message": message,
-			"type":    "invalid_request",
-		},
-	})
+	apierror.Write(c, apierror.CodeInvalidParam, message)
 }
 
 func writeServiceUnavailable(c *gin.Context) {
-	c.JSON(http.StatusServiceUnavailable, gin.H{
-		"error": gin.H{
-			"message": "database is not configured",
-			"type":    "service_unavailable",
-		},
-	})
+	apierror.Write(c, apierror.CodeServiceError, "database is not configured")
 }
 
 func writeDatabaseError(c *gin.Context, err error) {
@@ -1296,28 +1282,18 @@ func writeDatabaseError(c *gin.Context, err error) {
 	if errors.As(err, &pgErr) {
 		switch pgErr.Code {
 		case "23505":
-			c.JSON(http.StatusConflict, gin.H{
-				"error": gin.H{
-					"message": "resource already exists",
-					"type":    "conflict",
-				},
-			})
+			apierror.Write(c, apierror.CodeConflict, "resource already exists")
 			return
 		case "23503":
-			writeBadRequest(c, "referenced resource does not exist")
+			apierror.Write(c, apierror.CodeInvalidParam, "referenced resource does not exist")
 			return
 		case "23514":
-			writeBadRequest(c, "request violates database constraints")
+			apierror.Write(c, apierror.CodeInvalidParam, "request violates database constraints")
 			return
 		}
 	}
 
-	c.JSON(http.StatusInternalServerError, gin.H{
-		"error": gin.H{
-			"message": err.Error(),
-			"type":    "database_error",
-		},
-	})
+	apierror.Write(c, apierror.CodeInternalError, err.Error())
 }
 
 func normalizeJSON(input json.RawMessage) json.RawMessage {

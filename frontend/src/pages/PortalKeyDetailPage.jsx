@@ -54,6 +54,7 @@ export default function PortalKeyDetailPage() {
   const [debugOpen, setDebugOpen] = useState(false);
   const [models, setModels] = useState([]);
   const [debugModel, setDebugModel] = useState("");
+  const [debugProviderType, setDebugProviderType] = useState("openai");
   const [debugMessage, setDebugMessage] = useState("");
   const [debugStream, setDebugStream] = useState(true);
   const [debugLoading, setDebugLoading] = useState(false);
@@ -122,7 +123,7 @@ export default function PortalKeyDetailPage() {
     setDebugLoading(true);
     setDebugResult(null);
     try {
-      const payload = { model: debugModel, messages: [{ role: "user", content: debugMessage.trim() }], stream: debugStream };
+      const payload = { model: debugModel, provider_type: debugProviderType, messages: [{ role: "user", content: debugMessage.trim() }], stream: debugStream };
       const result = await sendPortalDebugChat(id, payload, {
         signal: ctrl.signal,
         onUpdate: (update) => setDebugResult({ ...update }),
@@ -276,15 +277,27 @@ export default function PortalKeyDetailPage() {
           setDebugOpen(false);
           setDebugResult(null);
           setDebugMessage("");
+          setDebugProviderType("openai");
         }}
         destroyOnClose
       >
         <Space direction="vertical" style={{ width: "100%" }} size={12}>
           <Space wrap align="center">
             <Select
+              value={debugProviderType}
+              onChange={setDebugProviderType}
+              style={{ width: 120 }}
+              options={[
+                { value: "openai", label: "OpenAI" },
+                { value: "openai_compatible", label: "OpenAI 兼容" },
+                { value: "anthropic", label: "Anthropic" },
+                { value: "gemini", label: "Gemini" },
+              ]}
+            />
+            <Select
               value={debugModel}
               onChange={setDebugModel}
-              style={{ width: 240 }}
+              style={{ width: 200 }}
               placeholder="选择模型"
               options={models.map((m) => ({ value: m.public_name, label: m.public_name }))}
             />

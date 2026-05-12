@@ -1,11 +1,11 @@
 package middleware
 
 import (
-	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 
+	"wcstransfer/backend/internal/apierror"
 	adminauthsvc "wcstransfer/backend/internal/service/adminauth"
 )
 
@@ -35,10 +35,5 @@ func AdminAuth(tokens *adminauthsvc.Service) gin.HandlerFunc {
 }
 
 func abortAdminUnauthorized(c *gin.Context) {
-	c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-		"error": gin.H{
-			"message": "unauthorized",
-			"type":    "auth_error",
-		},
-	})
+	apierror.Abort(c, apierror.CodeUnauthorized, "unauthorized")
 }

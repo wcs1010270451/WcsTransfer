@@ -13,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
 
+	"wcstransfer/backend/internal/apierror"
 	"wcstransfer/backend/internal/entity"
 	"wcstransfer/backend/internal/middleware"
 	"wcstransfer/backend/internal/repository"
@@ -628,11 +629,27 @@ func parseTimeQuery(c *gin.Context, key string) (*time.Time, bool) {
 	return &parsed, true
 }
 
-func writeError(c *gin.Context, statusCode int, errorType string, message string) {
-	c.JSON(statusCode, gin.H{
-		"error": gin.H{
-			"type":    errorType,
-			"message": message,
-		},
-	})
+// writeError 将 HTTP 状态码映射为业务错误码，统一返回 HTTP 200。
+func writeError(c *gin.Context, statusCode int, _ string, message string) {
+	code := statusToCode(statusCode)
+	apierror.Write(c, code, message)
+}
+
+func statusToCode(httpStatus int) int {
+	switch httpStatus {
+	case http.StatusUnauthorized:
+		return apierror.CodeUnauthorized
+	case http.StatusForbidden:
+		return apierror.CodeForbidden
+	case http.StatusBadRequest:
+		return apierror.CodeInvalidParam
+	case http.StatusNotFound:
+		return apierror.CodeNotFound
+	case http.StatusConflict:
+		return apierror.CodeConflict
+	case http.StatusServiceUnavailable:
+		return apierror.CodeServiceError
+	default:
+		return apierror.CodeInternalError
+	}
 }

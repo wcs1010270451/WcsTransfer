@@ -3,6 +3,24 @@ import useSettingsStore from "../store/settingsStore";
 import usePortalAuthStore from "../store/portalAuthStore";
 import useAdminAuthStore from "../store/adminAuthStore";
 
+// 统一拦截业务错误码（HTTP 200 + code 非零）
+const withBusinessErrorInterceptor = (instance) => {
+  instance.interceptors.response.use(
+    (response) => {
+      const d = response.data;
+      if (d && typeof d.code === "number" && d.code !== 0) {
+        const err = new Error(d.message || "请求失败");
+        err.code = d.code;
+        err.response = response;
+        return Promise.reject(err);
+      }
+      return response;
+    },
+    (error) => Promise.reject(error)
+  );
+  return instance;
+};
+
 const createClient = () => {
   const { apiBaseUrl } = useSettingsStore.getState();
   const { token } = useAdminAuthStore.getState();
@@ -12,10 +30,9 @@ const createClient = () => {
     headers.Authorization = `Bearer ${token}`;
   }
 
-  return axios.create({
-    baseURL: apiBaseUrl,
-    headers,
-  });
+  return withBusinessErrorInterceptor(
+    axios.create({ baseURL: apiBaseUrl, headers })
+  );
 };
 
 const createFetchHeaders = () => {
@@ -40,10 +57,9 @@ const createPortalClient = () => {
     headers.Authorization = `Bearer ${token}`;
   }
 
-  return axios.create({
-    baseURL: apiBaseUrl,
-    headers,
-  });
+  return withBusinessErrorInterceptor(
+    axios.create({ baseURL: apiBaseUrl, headers })
+  );
 };
 
 export const fetchHealth = async () => {
@@ -53,7 +69,8 @@ export const fetchHealth = async () => {
 
 export const loginAdminUser = async (payload) => {
   const { apiBaseUrl } = useSettingsStore.getState();
-  const response = await axios.post(`${apiBaseUrl}/admin/auth/login`, payload);
+  const instance = withBusinessErrorInterceptor(axios.create({ baseURL: apiBaseUrl }));
+  const response = await instance.post("/admin/auth/login", payload);
   return response.data;
 };
 
@@ -491,7 +508,8 @@ export const debugAnthropicMessagesStream = async (payload, options = {}) => {
 
 export const loginPortalUser = async (payload) => {
   const { apiBaseUrl } = useSettingsStore.getState();
-  const response = await axios.post(`${apiBaseUrl}/portal/auth/login`, payload);
+  const instance = withBusinessErrorInterceptor(axios.create({ baseURL: apiBaseUrl }));
+  const response = await instance.post("/portal/auth/login", payload);
   return response.data;
 };
 
@@ -581,19 +599,46 @@ export const sendPortalDebugChat = async (keyId, payload, options = {}) => {
 
   if (!contentType.toLowerCase().includes("text/event-stream")) {
     const data = await response.json().catch(() => ({}));
+    // 业务错误：HTTP 200 + code 非零（来自预验证层）
+    if (response.ok && typeof data?.code === "number" && data.code !== 0) {
+      const error = new Error(data.message || "请求失败");
+      error.code = data.code;
+      error.response = { data, headers: respHeaders, status: response.status };
+      throw error;
+    }
+    // HTTP 层错误：来自上游代理（OpenAI 格式）
     if (!response.ok) {
       const error = new Error(data?.error?.message || `Request failed with status ${response.status}`);
       error.response = { data, headers: respHeaders, status: response.status };
       throw error;
     }
-    return {
-      data,
-      headers: respHeaders,
-      status: response.status,
-      assistantText: data?.choices?.[0]?.message?.content || "",
-      rawText: JSON.stringify(data, null, 2),
-      usage: data?.usage || null,
-    };
+    // OpenAI format
+    if (data?.choices) {
+      return {
+        data,
+        headers: respHeaders,
+        status: response.status,
+        assistantText: data.choices[0]?.message?.content || "",
+        rawText: JSON.stringify(data, null, 2),
+        usage: data.usage || null,
+      };
+    }
+    // Anthropic format
+    if (data?.content) {
+      const anthropicText = (data.content).filter((b) => b.type === "text").map((b) => b.text).join("");
+      const anthropicUsage = data?.usage
+        ? { prompt_tokens: data.usage.input_tokens ?? 0, completion_tokens: data.usage.output_tokens ?? 0, total_tokens: (data.usage.input_tokens ?? 0) + (data.usage.output_tokens ?? 0) }
+        : null;
+      return { data, headers: respHeaders, status: response.status, assistantText: anthropicText, rawText: JSON.stringify(data, null, 2), usage: anthropicUsage };
+    }
+    // Gemini format
+    if (data?.candidates) {
+      const geminiText = (data.candidates[0]?.content?.parts || []).filter((p) => typeof p.text === "string").map((p) => p.text).join("");
+      const u = data?.usageMetadata;
+      const geminiUsage = u ? { prompt_tokens: u.promptTokenCount ?? 0, completion_tokens: u.candidatesTokenCount ?? 0, total_tokens: u.totalTokenCount ?? 0 } : null;
+      return { data, headers: respHeaders, status: response.status, assistantText: geminiText, rawText: JSON.stringify(data, null, 2), usage: geminiUsage };
+    }
+    return { data, headers: respHeaders, status: response.status, assistantText: "", rawText: JSON.stringify(data, null, 2), usage: null };
   }
 
   const reader = response.body?.getReader();
@@ -601,7 +646,8 @@ export const sendPortalDebugChat = async (keyId, payload, options = {}) => {
   let buffer = "";
   let rawText = "";
   let assistantText = "";
-  let usage = null;
+  let promptTokens = 0;
+  let completionTokens = 0;
 
   const flushEvent = (eventText) => {
     for (const line of eventText.split("\n")) {
@@ -611,9 +657,34 @@ export const sendPortalDebugChat = async (keyId, payload, options = {}) => {
       if (!payloadText || payloadText === "[DONE]") continue;
       try {
         const parsed = JSON.parse(payloadText);
-        const content = parsed?.choices?.[0]?.delta?.content;
-        if (typeof content === "string") assistantText += content;
-        if (parsed?.usage) usage = parsed.usage;
+        // Anthropic SSE format
+        if (parsed?.type === "content_block_delta" && parsed?.delta?.type === "text_delta") {
+          assistantText += parsed.delta.text || "";
+        } else if (parsed?.type === "message_start" && parsed?.message?.usage) {
+          promptTokens = parsed.message.usage.input_tokens ?? promptTokens;
+        } else if (parsed?.type === "message_delta" && parsed?.usage) {
+          completionTokens = parsed.usage.output_tokens ?? completionTokens;
+        } else if (parsed?.candidates) {
+          // Gemini SSE format
+          const text = parsed.candidates[0]?.content?.parts?.[0]?.text;
+          if (typeof text === "string") assistantText += text;
+          const u = parsed?.usageMetadata;
+          if (u) {
+            promptTokens = u.promptTokenCount ?? promptTokens;
+            completionTokens = u.candidatesTokenCount ?? completionTokens;
+          }
+        } else {
+          // OpenAI SSE format
+          const content = parsed?.choices?.[0]?.delta?.content;
+          if (typeof content === "string") assistantText += content;
+          if (parsed?.usage) {
+            promptTokens = parsed.usage.prompt_tokens ?? promptTokens;
+            completionTokens = parsed.usage.completion_tokens ?? completionTokens;
+          }
+        }
+        const usage = promptTokens || completionTokens
+          ? { prompt_tokens: promptTokens, completion_tokens: completionTokens, total_tokens: promptTokens + completionTokens }
+          : null;
         options.onUpdate?.({ assistantText, rawText, usage, headers: respHeaders, status: response.status });
       } catch {}
     }
@@ -643,6 +714,9 @@ export const sendPortalDebugChat = async (keyId, payload, options = {}) => {
     throw error;
   }
 
+  const usage = promptTokens || completionTokens
+    ? { prompt_tokens: promptTokens, completion_tokens: completionTokens, total_tokens: promptTokens + completionTokens }
+    : null;
   return {
     data: { stream: true, assistant_text: assistantText, usage },
     headers: respHeaders,

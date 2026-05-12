@@ -1,9 +1,13 @@
 package router
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
-	"net/http"
+	"fmt"
+	"io"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
@@ -13,6 +17,7 @@ import (
 	"wcstransfer/backend/internal/api/openai"
 	"wcstransfer/backend/internal/api/system"
 	"wcstransfer/backend/internal/api/tenant"
+	"wcstransfer/backend/internal/apierror"
 	"wcstransfer/backend/internal/config"
 	"wcstransfer/backend/internal/middleware"
 	"wcstransfer/backend/internal/platform"
@@ -99,29 +104,136 @@ func New(cfg config.Config, deps *platform.Dependencies, stores *Stores) *gin.En
 		portalGroup.POST("/client-keys/:id/debug/chat/completions", func(c *gin.Context) {
 			claims, ok := middleware.UserClaimsFromContext(c)
 			if !ok {
-				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": gin.H{"message": "unauthorized", "type": "unauthorized"}})
+				apierror.Write(c, apierror.CodeUnauthorized, "unauthorized")
 				return
 			}
 			keyID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 			if err != nil {
-				c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": "invalid key id", "type": "invalid_request"}})
+				apierror.Write(c, apierror.CodeInvalidParam, "invalid key id")
 				return
 			}
 			key, err := resolvedStores.UserKeys.GetUserClientAPIKeyByID(c.Request.Context(), claims.Sub, keyID)
 			if err != nil {
-				status := http.StatusInternalServerError
 				if errors.Is(err, pgx.ErrNoRows) {
-					status = http.StatusNotFound
+					apierror.Write(c, apierror.CodeNotFound, "key not found")
+				} else {
+					apierror.Write(c, apierror.CodeInternalError, "internal error")
 				}
-				c.AbortWithStatusJSON(status, gin.H{"error": gin.H{"message": "key not found", "type": "not_found"}})
 				return
 			}
 			if key.Status != "active" {
-				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": gin.H{"message": "key is disabled", "type": "key_disabled"}})
+				apierror.Write(c, apierror.CodeInvalidState, "key is disabled")
 				return
 			}
+
+			bodyBytes, err := io.ReadAll(c.Request.Body)
+			if err != nil {
+				apierror.Write(c, apierror.CodeInvalidBody, "failed to read request body")
+				return
+			}
+
+			var req struct {
+				Model        string `json:"model"`
+				ProviderType string `json:"provider_type"`
+				Stream       bool   `json:"stream"`
+			}
+			if json.Unmarshal(bodyBytes, &req) != nil || req.Model == "" {
+				apierror.Write(c, apierror.CodeInvalidParam, "model is required")
+				return
+			}
+			if req.ProviderType == "" {
+				apierror.Write(c, apierror.CodeInvalidParam, "provider_type is required")
+				return
+			}
+
+			route, err := resolvedStores.Public.ResolveModelRoute(c.Request.Context(), req.Model)
+			if err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					apierror.Write(c, apierror.CodeNotFound, "model not found or unavailable")
+				} else {
+					apierror.Write(c, apierror.CodeInternalError, "failed to resolve model")
+				}
+				return
+			}
+			if len(route.Keys) == 0 {
+				apierror.Write(c, apierror.CodeRoutingError, "no active provider key available for this model")
+				return
+			}
+
+			// 校验用户选择的供应商类型与模型实际类型是否匹配
+			// gemini 和 vertex_ai 对用户来说都属于 Gemini 类型
+			normalizeType := func(pt string) string {
+				pt = strings.ToLower(strings.TrimSpace(pt))
+				if pt == "vertex_ai" {
+					return "gemini"
+				}
+				if pt == "openai_compatible" {
+					return "openai"
+				}
+				return pt
+			}
+			if normalizeType(req.ProviderType) != normalizeType(route.Provider.ProviderType) {
+				apierror.Write(c, apierror.CodeInvalidParam,
+					fmt.Sprintf("模型 %s 属于 %s 供应商，请切换调试类型后重试", req.Model, route.Provider.ProviderType))
+				return
+			}
+
 			middleware.SetClientAPIKeyInContext(c, key)
-			openAIHandler.ChatCompletions(c)
+			switch normalizeType(route.Provider.ProviderType) {
+			case "anthropic":
+				if route.Model.MaxTokens <= 0 {
+					var full map[string]any
+					if json.Unmarshal(bodyBytes, &full) == nil {
+						if _, has := full["max_tokens"]; !has {
+							full["max_tokens"] = 4096
+							if patched, merr := json.Marshal(full); merr == nil {
+								bodyBytes = patched
+							}
+						}
+					}
+				}
+				c.Request.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+				openAIHandler.Messages(c)
+			case "gemini":
+				// 将 OpenAI messages 格式转为 Gemini contents 格式
+				var full map[string]any
+				if json.Unmarshal(bodyBytes, &full) == nil {
+					if msgs, ok := full["messages"].([]any); ok {
+						contents := make([]any, 0, len(msgs))
+						for _, msg := range msgs {
+							m, ok := msg.(map[string]any)
+							if !ok {
+								continue
+							}
+							role, _ := m["role"].(string)
+							if strings.EqualFold(role, "assistant") {
+								role = "model"
+							}
+							text, _ := m["content"].(string)
+							contents = append(contents, map[string]any{
+								"role":  role,
+								"parts": []any{map[string]any{"text": text}},
+							})
+						}
+						full["contents"] = contents
+						delete(full, "messages")
+					}
+					delete(full, "stream")
+					delete(full, "provider_type")
+					if patched, merr := json.Marshal(full); merr == nil {
+						bodyBytes = patched
+					}
+				}
+				c.Request.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+				if req.Stream {
+					openAIHandler.GeminiStreamGenerateContent(c)
+				} else {
+					openAIHandler.GeminiGenerateContent(c)
+				}
+			default: // openai
+				c.Request.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+				openAIHandler.ChatCompletions(c)
+			}
 		})
 	}
 

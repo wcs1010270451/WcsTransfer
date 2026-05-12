@@ -583,8 +583,18 @@ func TestAdminRoutesRequireTokenWhenConfigured(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/admin/providers", nil)
 	engine.ServeHTTP(recorder, request)
 
-	if recorder.Code != http.StatusUnauthorized {
-		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, recorder.Code)
+	// 业务层认证失败统一返回 HTTP 200 + code 1001
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
+	}
+	var body struct {
+		Code int `json:"code"`
+	}
+	if err := json.NewDecoder(recorder.Body).Decode(&body); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if body.Code != 1001 {
+		t.Fatalf("expected business code 1001, got %d", body.Code)
 	}
 }
 

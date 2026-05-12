@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { AppstoreOutlined, KeyOutlined, LogoutOutlined, UserOutlined } from "@ant-design/icons";
-import { Avatar, Button, Layout, Menu, Space, Typography } from "antd";
+import { Avatar, Button, ConfigProvider, Layout, Menu, Space, Typography } from "antd";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { fetchPortalMe } from "../api/client";
 import usePortalAuthStore from "../store/portalAuthStore";
@@ -35,6 +35,7 @@ export default function PortalLayout() {
   const avatarLetter = currentUser?.email?.[0]?.toUpperCase() || "U";
 
   return (
+  <ConfigProvider theme={{ token: { colorPrimary: "#1677ff", colorInfo: "#1677ff" } }}>
     <Layout className="portal-shell">
       <Header className="portal-header">
         <div className="portal-logo">
@@ -74,5 +75,6 @@ export default function PortalLayout() {
         </Content>
       </Layout>
     </Layout>
+  </ConfigProvider>
   );
 }
