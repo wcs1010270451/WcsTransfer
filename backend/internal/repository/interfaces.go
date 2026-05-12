@@ -60,6 +60,7 @@ type UserClientKeyStore interface {
 	GetUserRequestLog(ctx context.Context, userID int64, id int64) (entity.RequestLogDetail, error)
 	ExportUserRequestLogs(ctx context.Context, userID int64, input entity.ListRequestLogsInput) ([]entity.RequestLog, error)
 	ListModels(ctx context.Context) ([]entity.Model, error)
+	ListEnabledModels(ctx context.Context) ([]entity.Model, error)
 	GetUserPortalDailyStats(ctx context.Context, userID int64, from, to time.Time) ([]entity.DailyStatPoint, error)
 	GetUserClientKeyModelStats(ctx context.Context, userID int64, keyID int64) ([]entity.KeyModelUsageStat, error)
 	GetUserClientAPIKeyByID(ctx context.Context, userID int64, id int64) (entity.ClientAPIKey, error)

@@ -270,7 +270,7 @@ func (h *Handler) Models(c *gin.Context) {
 		return
 	}
 
-	items, err := h.keyStore.ListModels(c.Request.Context())
+	items, err := h.keyStore.ListEnabledModels(c.Request.Context())
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, "database_error", err.Error())
 		return

@@ -910,6 +910,7 @@ SELECT m.id, m.public_name, m.provider_id, p.name, m.upstream_model, m.route_str
 FROM models m
 JOIN providers p ON p.id = m.provider_id
 WHERE m.is_enabled = TRUE
+  AND p.status = 'active'
 ORDER BY m.public_name ASC`
 
 	rows, err := s.pool.Query(ctx, query)
