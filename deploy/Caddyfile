@@ -41,6 +41,10 @@
         reverse_proxy backend:8080
     }
 
+    handle /v1beta/* {
+        reverse_proxy backend:8080
+    }
+
     handle /admin/* {
         reverse_proxy backend:8080
     }
