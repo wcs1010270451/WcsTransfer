@@ -104,6 +104,10 @@ func extractClientAPIKey(c *gin.Context) string {
 	if value := strings.TrimSpace(c.Query("key")); value != "" {
 		return value
 	}
+	// Google-style x-goog-api-key header (used by Gemini CLI and Google SDKs)
+	if value := strings.TrimSpace(c.GetHeader("x-goog-api-key")); value != "" {
+		return value
+	}
 	if value := strings.TrimSpace(c.GetHeader("X-API-Key")); value != "" {
 		return value
 	}
