@@ -100,6 +100,10 @@ func writeAuthRejectionLog(c *gin.Context, logWriter repository.RequestLogWriter
 }
 
 func extractClientAPIKey(c *gin.Context) string {
+	// Google-style ?key=xxx query parameter (Gemini native API compat)
+	if value := strings.TrimSpace(c.Query("key")); value != "" {
+		return value
+	}
 	if value := strings.TrimSpace(c.GetHeader("X-API-Key")); value != "" {
 		return value
 	}

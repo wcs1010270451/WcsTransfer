@@ -620,6 +620,59 @@ func extractGeminiUsageFromStreamBuffer(buffer *bytes.Buffer, metadata map[strin
 	}
 }
 
+// GeminiNativeAPI handles Google's native Gemini REST API path format:
+//
+//	POST /v1beta/models/{model}:generateContent
+//	POST /v1beta/models/{model}:streamGenerateContent
+//
+// The model name is extracted from the URL and injected into the request body
+// so the existing handler can pick it up normally.
+func (h *Handler) GeminiNativeAPI(c *gin.Context) {
+	// Gin wildcard param includes the leading slash, e.g. "/gemini-2.5-flash:generateContent"
+	action := strings.TrimPrefix(c.Param("action"), "/")
+
+	colonIdx := strings.LastIndex(action, ":")
+	if colonIdx <= 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": gin.H{"message": "not found", "type": "not_found"}})
+		return
+	}
+	model := action[:colonIdx]
+	method := action[colonIdx+1:]
+
+	if model == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": "model is required in path", "type": "invalid_request"}})
+		return
+	}
+
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": "failed to read request body", "type": "invalid_request"}})
+		return
+	}
+
+	// Inject model into body (Google's native format does not include it in the body)
+	payload := make(map[string]any)
+	if len(bytes.TrimSpace(body)) > 0 {
+		if err := json.Unmarshal(body, &payload); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": "request body must be valid JSON", "type": "invalid_request"}})
+			return
+		}
+	}
+	payload["model"] = model
+
+	newBody, _ := json.Marshal(payload)
+	c.Request.Body = io.NopCloser(bytes.NewReader(newBody))
+
+	switch method {
+	case "streamGenerateContent":
+		h.GeminiStreamGenerateContent(c)
+	case "generateContent":
+		h.GeminiGenerateContent(c)
+	default:
+		c.JSON(http.StatusNotFound, gin.H{"error": gin.H{"message": "unsupported method: " + method, "type": "not_found"}})
+	}
+}
+
 func applyGeminiUsage(metadata map[string]any, state *chatLogState, responseBody []byte, model entity.Model) {
 	var payload map[string]any
 	if err := json.Unmarshal(responseBody, &payload); err != nil {

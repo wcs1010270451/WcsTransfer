@@ -249,6 +249,16 @@ func New(cfg config.Config, deps *platform.Dependencies, stores *Stores) *gin.En
 		v1.POST("/messages", openAIHandler.Messages)
 		v1.POST("/gemini/generate-content", openAIHandler.GeminiGenerateContent)
 		v1.POST("/gemini/stream-generate-content", openAIHandler.GeminiStreamGenerateContent)
+		// Google Gemini native API format: /v1/models/{model}:generateContent
+		v1.POST("/models/*action", openAIHandler.GeminiNativeAPI)
+	}
+
+	// Google Gemini native API compat: /v1beta/models/{model}:generateContent
+	v1beta := engine.Group("/v1beta")
+	v1beta.Use(middleware.PublicAPIAuth(resolvedStores.Auth, resolvedStores.Log))
+	v1beta.Use(middleware.PublicAPIQuota(quota))
+	{
+		v1beta.POST("/models/*action", openAIHandler.GeminiNativeAPI)
 	}
 
 	adminGroup := engine.Group("/admin")
