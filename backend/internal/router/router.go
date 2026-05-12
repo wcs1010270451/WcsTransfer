@@ -155,7 +155,9 @@ func New(cfg config.Config, deps *platform.Dependencies, stores *Stores) *gin.En
 				}
 				return
 			}
-			if len(route.Keys) == 0 {
+			// vertex_ai 走 ADC，不需要配置 provider key
+			isVertexAI := strings.EqualFold(strings.TrimSpace(route.Provider.ProviderType), "vertex_ai")
+			if len(route.Keys) == 0 && !isVertexAI {
 				apierror.Write(c, apierror.CodeRoutingError, "no active provider key available for this model")
 				return
 			}
