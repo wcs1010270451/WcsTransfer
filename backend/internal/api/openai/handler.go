@@ -1129,10 +1129,15 @@ func (h *Handler) writeDebugHeaders(headers http.Header, state chatLogState, opt
 	headers.Set("X-Wcs-Debug-Failover-Count", intToString(metadataInt(state.metadata["failover_count"])))
 }
 
-func (h *Handler) writeRequestLog(ctx context.Context, startedAt time.Time, state chatLogState) {
+func (h *Handler) writeRequestLog(_ context.Context, startedAt time.Time, state chatLogState) {
 	if h.logWriter == nil {
 		return
 	}
+
+	// Use a background context — the request context may already be cancelled
+	// (client disconnected) by the time deferred log writes fire in streaming flows.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
 	metadataBytes, _ := json.Marshal(state.metadata)
 	latencyMS := int(time.Since(startedAt).Milliseconds())
