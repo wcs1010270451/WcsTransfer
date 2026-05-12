@@ -673,6 +673,10 @@ export const sendPortalDebugChat = async (keyId, payload, options = {}) => {
             promptTokens = u.promptTokenCount ?? promptTokens;
             completionTokens = u.candidatesTokenCount ?? completionTokens;
           }
+        } else if (parsed?.error) {
+          // backend SSE error event (all provider types)
+          const errMsg = parsed.error.message || "unknown stream error";
+          options.onUpdate?.({ assistantText, rawText, usage: null, error: errMsg, headers: respHeaders, status: response.status });
         } else {
           // OpenAI SSE format
           const content = parsed?.choices?.[0]?.delta?.content;

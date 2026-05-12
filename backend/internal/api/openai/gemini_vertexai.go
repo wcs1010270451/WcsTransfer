@@ -146,6 +146,7 @@ func (h *Handler) streamVertexAISDKResponse(
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
+	c.Status(http.StatusOK)
 
 	logState.httpStatus = http.StatusOK
 	logState.success = true
@@ -153,6 +154,19 @@ func (h *Handler) streamVertexAISDKResponse(
 
 	preview := bytes.NewBuffer(nil)
 	truncated := false
+	wroteAny := false
+
+	writeSSEError := func(message string) {
+		errEvent := wrappedPayloadJSON(map[string]any{
+			"error": map[string]any{"type": "stream_error", "message": message},
+		})
+		line := append([]byte("data: "), errEvent...)
+		line = append(line, '\n', '\n')
+		_, _ = c.Writer.Write(line)
+		if canFlush {
+			flusher.Flush()
+		}
+	}
 
 	for chunk, err := range client.Models.GenerateContentStream(ctx, modelName, contents, genConfig) {
 		if err != nil {
@@ -160,6 +174,7 @@ func (h *Handler) streamVertexAISDKResponse(
 				logState.success = false
 				logState.errorType = "stream_error"
 				logState.errorMessage = err.Error()
+				writeSSEError(err.Error())
 			}
 			break
 		}
@@ -181,6 +196,7 @@ func (h *Handler) streamVertexAISDKResponse(
 			logState.errorMessage = writeErr.Error()
 			break
 		}
+		wroteAny = true
 		if canFlush {
 			flusher.Flush()
 		}
@@ -196,6 +212,13 @@ func (h *Handler) streamVertexAISDKResponse(
 		} else {
 			truncated = true
 		}
+	}
+
+	if !wroteAny && logState.errorType == "" {
+		writeSSEError("no content returned from upstream")
+		logState.success = false
+		logState.errorType = "empty_response"
+		logState.errorMessage = "no content returned from upstream"
 	}
 
 	logState.responsePayload = wrappedPayloadJSON(map[string]any{
