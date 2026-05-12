@@ -155,8 +155,8 @@ func New(cfg config.Config, deps *platform.Dependencies, stores *Stores) *gin.En
 				}
 				return
 			}
-			// vertex_ai 走 ADC，不需要配置 provider key
-			isVertexAI := strings.EqualFold(strings.TrimSpace(route.Provider.ProviderType), "vertex_ai")
+			// vertexai 走 ADC，不需要配置 provider key
+			isVertexAI := strings.EqualFold(strings.TrimSpace(route.Provider.ProviderType), "vertexai")
 			if len(route.Keys) == 0 && !isVertexAI {
 				apierror.Write(c, apierror.CodeRoutingError, "no active provider key available for this model")
 				return
@@ -166,7 +166,7 @@ func New(cfg config.Config, deps *platform.Dependencies, stores *Stores) *gin.En
 			// gemini 和 vertex_ai 对用户来说都属于 Gemini 类型
 			normalizeType := func(pt string) string {
 				pt = strings.ToLower(strings.TrimSpace(pt))
-				if pt == "vertex_ai" {
+				if pt == "vertexai" {
 					return "gemini"
 				}
 				if pt == "openai_compatible" {
