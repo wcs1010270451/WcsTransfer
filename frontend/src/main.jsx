@@ -9,14 +9,14 @@ const appBasePath = (import.meta.env.VITE_APP_BASE_PATH || "/console/").trim().r
 
 const theme = {
   token: {
-    colorPrimary: "#0f766e",
-    colorInfo: "#0f766e",
-    colorSuccess: "#15803d",
-    colorWarning: "#b45309",
-    colorError: "#b91c1c",
-    borderRadius: 18,
-    fontFamily: `"Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif`,
-    colorBgBase: "#f5f7f1",
+    colorPrimary: "#4f46e5",
+    colorInfo: "#4f46e5",
+    colorSuccess: "#10b981",
+    colorWarning: "#f59e0b",
+    colorError: "#ef4444",
+    borderRadius: 12,
+    fontFamily: `-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif`,
+    colorBgBase: "#ffffff",
   },
 };
 

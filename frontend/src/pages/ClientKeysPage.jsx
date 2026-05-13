@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { App, Button, Descriptions, Drawer, Popconfirm, Space, Table, Tag } from "antd";
+import { App, Button, Descriptions, Drawer, Popconfirm, Space, Table, Tag, Typography } from "antd";
 import { fetchClientKeys, updateClientKey } from "../api/client";
 import PageHeaderCard from "../components/PageHeaderCard";
 
@@ -79,9 +79,22 @@ export default function ClientKeysPage() {
           loading={loading}
           dataSource={clientKeys}
           pagination={false}
+          onRow={(record) => ({
+            onClick: () => openDetailDrawer(record),
+            style: { cursor: "pointer" },
+          })}
           columns={[
-            { title: "名称", dataIndex: "name", key: "name" },
-            { title: "脱敏密钥", dataIndex: "masked_key", key: "masked_key" },
+            { title: "名称", dataIndex: "name", key: "name", render: (text) => <Typography.Text strong>{text}</Typography.Text> },
+            {
+              title: "脱敏密钥",
+              dataIndex: "masked_key",
+              key: "masked_key",
+              render: (text) => (
+                <Typography.Text style={{ fontFamily: "ui-monospace, SFMono-Regular, Consolas, monospace", fontSize: 13 }}>
+                  {text}
+                </Typography.Text>
+              ),
+            },
             {
               title: "所属用户",
               dataIndex: "email",
@@ -92,7 +105,11 @@ export default function ClientKeysPage() {
               title: "状态",
               dataIndex: "status",
               key: "status",
-              render: (value) => <Tag color={value === "active" ? "green" : "default"}>{value}</Tag>,
+              render: (value) => (
+                <Tag bordered={false} color={value === "active" ? "success" : "default"} style={{ borderRadius: 6 }}>
+                  {value.toUpperCase()}
+                </Tag>
+              ),
             },
             {
               title: "授权模型",
@@ -108,11 +125,9 @@ export default function ClientKeysPage() {
             {
               title: "操作",
               key: "actions",
+              width: 100,
               render: (_, record) => (
-                <Space>
-                  <Button size="small" onClick={() => openDetailDrawer(record)}>
-                    详情
-                  </Button>
+                <Space onClick={(e) => e.stopPropagation()}>
                   <Popconfirm
                     title={record.status === "active" ? "确定停用这个客户端密钥吗？" : "确定启用这个客户端密钥吗？"}
                     onConfirm={() => handleToggleStatus(record)}

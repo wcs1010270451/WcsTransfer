@@ -193,7 +193,7 @@ export default function LogsPage() {
           rowKey="id"
           loading={loading}
           dataSource={logs}
-          scroll={{ x: 1400 }}
+          scroll={{ x: 1300 }}
           pagination={{
             current: pagination.current,
             pageSize: pagination.pageSize,
@@ -202,39 +202,37 @@ export default function LogsPage() {
             pageSizeOptions: ["10", "20", "50", "100"],
           }}
           onChange={handleTableChange}
+          onRow={(record) => ({
+            onClick: () => openDetail(record),
+            style: { cursor: "pointer" },
+          })}
           columns={[
             { title: "Trace ID", dataIndex: "trace_id", key: "trace_id", width: 220, ellipsis: true },
             { title: "客户端", dataIndex: "client_api_key_name", key: "client_api_key_name", width: 160 },
             { title: "提供方", dataIndex: "provider_name", key: "provider_name", width: 140 },
             { title: "密钥", dataIndex: "provider_key_name", key: "provider_key_name", width: 140 },
             { title: "模型", dataIndex: "model_public_name", key: "model_public_name", width: 160 },
-            { title: "请求类型", dataIndex: "request_type", key: "request_type", width: 150 },
+            { title: "请求类型", dataIndex: "request_type", key: "request_type", width: 180 },
             {
               title: "状态",
               dataIndex: "success",
               key: "success",
               width: 110,
-              render: (value) => <Tag color={value ? "green" : "red"}>{value ? "成功" : "失败"}</Tag>,
+              render: (value) => (
+                <Tag bordered={false} color={value ? "success" : "error"} style={{ borderRadius: 6 }}>
+                  {value ? "SUCCESS" : "FAILED"}
+                </Tag>
+              ),
             },
-            { title: "HTTP", dataIndex: "http_status", key: "http_status", width: 90 },
-            { title: "延迟", dataIndex: "latency_ms", key: "latency_ms", width: 100, render: (value) => `${value} ms` },
-            { title: "Tokens", dataIndex: "total_tokens", key: "total_tokens", width: 100 },
+            { title: "HTTP", dataIndex: "http_status", key: "http_status", width: 80, align: "center" },
+            { title: "延迟", dataIndex: "latency_ms", key: "latency_ms", width: 100, align: "right", render: (value) => `${value}ms` },
+            { title: "Tokens", dataIndex: "total_tokens", key: "total_tokens", width: 100, align: "right" },
             {
-              title: "创建时间",
+              title: "时间",
               dataIndex: "created_at",
               key: "created_at",
               width: 180,
               render: (value) => (value ? new Date(value).toLocaleString() : "-"),
-            },
-            {
-              title: "操作",
-              key: "actions",
-              width: 100,
-              render: (_, record) => (
-                <Button size="small" onClick={() => openDetail(record)}>
-                  详情
-                </Button>
-              ),
             },
           ]}
         />

@@ -8,10 +8,12 @@ import {
   ExperimentOutlined,
   FileTextOutlined,
   KeyOutlined,
+  LogoutOutlined,
   SettingOutlined,
   TeamOutlined,
+  UserOutlined,
 } from "@ant-design/icons";
-import { Button, Layout, Menu, Space, Tag, Typography } from "antd";
+import { Avatar, Button, Dropdown, Layout, Menu, Space, Tag, Typography } from "antd";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import SettingsDrawer from "../components/SettingsDrawer";
 import useSettingsStore from "../store/settingsStore";
@@ -44,6 +46,25 @@ export default function AppLayout() {
     navigate("/admin/login", { replace: true });
   };
 
+  const currentMenuItem = menuItems.find((item) => item.key === location.pathname) || menuItems[0];
+
+  const userMenuItems = [
+    {
+      key: "settings",
+      icon: <SettingOutlined />,
+      label: "连接设置",
+      onClick: () => setSettingsOpen(true),
+    },
+    { type: "divider" },
+    {
+      key: "logout",
+      icon: <LogoutOutlined />,
+      label: "退出登录",
+      danger: true,
+      onClick: handleLogout,
+    },
+  ];
+
   return (
     <Layout className="app-shell">
       <Sider breakpoint="lg" collapsedWidth="0" width={280} className="app-sider">
@@ -52,16 +73,18 @@ export default function AppLayout() {
           <div>
             <Typography.Text className="brand-label">WcsTransfer</Typography.Text>
             <Typography.Title level={4} className="brand-title">
-              模型网关控制台
+              模型网关
             </Typography.Title>
           </div>
         </div>
 
         <div className="sider-panel">
-          <Typography.Text className="sider-panel-label">当前接口地址</Typography.Text>
-          <Typography.Paragraph className="sider-panel-value">{apiBaseUrl}</Typography.Paragraph>
-          <Tag color="green" bordered={false}>
-            管理接口已连接
+          <Typography.Text className="sider-panel-label">API BASE URL</Typography.Text>
+          <Typography.Paragraph ellipsis={{ rows: 1 }} className="sider-panel-value">
+            {apiBaseUrl}
+          </Typography.Paragraph>
+          <Tag color="cyan" bordered={false} style={{ borderRadius: 6, fontSize: 11 }}>
+            ADMIN CONNECTED
           </Tag>
         </div>
 
@@ -77,27 +100,46 @@ export default function AppLayout() {
 
       <Layout>
         <Header className="app-header">
-          <Space size="middle">
-            <div>
-              <Typography.Text className="header-kicker">内部控制台</Typography.Text>
-              <Typography.Title level={3} className="header-title">
-                网关控制中心
-              </Typography.Title>
-            </div>
-          </Space>
-          <Space>
-            {adminUser?.display_name || adminUser?.username ? (
-              <Tag color="green">{adminUser.display_name || adminUser.username}</Tag>
-            ) : null}
-            <Button icon={<SettingOutlined />} onClick={() => setSettingsOpen(true)}>
+          <div className="fade-in">
+            <Typography.Text className="header-kicker">管理控制台</Typography.Text>
+            <Typography.Title level={3} className="header-title">
+              {currentMenuItem.label}
+            </Typography.Title>
+          </div>
+
+          <Space size="large">
+            <Button
+              type="text"
+              icon={<SettingOutlined />}
+              onClick={() => setSettingsOpen(true)}
+              style={{ color: "var(--text-muted)" }}
+            >
               连接设置
             </Button>
-            <Button onClick={handleLogout}>退出</Button>
+
+            <Dropdown menu={{ items: userMenuItems }} placement="bottomRight" arrow>
+              <Space className="user-profile-trigger" style={{ cursor: "pointer" }}>
+                <div style={{ textAlign: "right", lineHeight: 1 }}>
+                  <Typography.Text strong style={{ display: "block", fontSize: 13 }}>
+                    {adminUser?.display_name || adminUser?.username || "Admin"}
+                  </Typography.Text>
+                  <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                    平台管理员
+                  </Typography.Text>
+                </div>
+                <Avatar
+                  icon={<UserOutlined />}
+                  style={{ backgroundColor: "var(--accent-primary)", boxShadow: "0 4px 8px rgba(13, 148, 136, 0.2)" }}
+                />
+              </Space>
+            </Dropdown>
           </Space>
         </Header>
 
         <Content className="app-content">
-          <Outlet />
+          <div className="fade-in">
+            <Outlet />
+          </div>
         </Content>
       </Layout>
 
