@@ -15,7 +15,7 @@ const theme = {
     colorWarning: "#f59e0b",
     colorError: "#ef4444",
     borderRadius: 12,
-    fontFamily: `-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif`,
+    fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
     colorBgBase: "#ffffff",
   },
 };

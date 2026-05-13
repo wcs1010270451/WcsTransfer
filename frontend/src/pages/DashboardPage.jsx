@@ -130,16 +130,16 @@ export default function DashboardPage() {
                 </div>
 
                 <List
-                  dataSource={Object.entries(health.dependencies || {})}
+                  dataSource={Object.entries(health?.dependencies || {})}
                   renderItem={([name, value]) => (
                     <List.Item style={{ padding: "8px 0" }}>
                       <Typography.Text>{name}</Typography.Text>
                       <Tag
                         bordered={false}
-                        color={value.status === "up" ? "success" : value.status === "disabled" ? "default" : "error"}
-                        icon={value.status === "up" ? <CheckCircleOutlined /> : <InfoCircleOutlined />}
+                        color={value?.status === "up" ? "success" : value?.status === "disabled" ? "default" : "error"}
+                        icon={value?.status === "up" ? <CheckCircleOutlined /> : <InfoCircleOutlined />}
                       >
-                        {value.status.toUpperCase()}
+                        {(value?.status || "unknown").toUpperCase()}
                       </Tag>
                     </List.Item>
                   )}
@@ -167,15 +167,15 @@ export default function DashboardPage() {
                         <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 4 }}>
                           <Typography.Text ellipsis style={{ maxWidth: "60%" }}>{item.client_api_key_name}</Typography.Text>
                           <Typography.Text type={item.highest_usage_percent > 80 ? "danger" : "secondary"}>
-                            {item.highest_usage_percent.toFixed(0)}%
+                            {(item.highest_usage_percent || 0).toFixed(0)}%
                           </Typography.Text>
                         </div>
                         <Progress
-                          percent={item.highest_usage_percent}
+                          percent={item.highest_usage_percent || 0}
                           size="small"
-                          status={item.highest_usage_percent > 90 ? "exception" : "active"}
+                          status={(item.highest_usage_percent || 0) > 90 ? "exception" : "active"}
                           showInfo={false}
-                          strokeColor={item.highest_usage_percent > 80 ? "#ef4444" : "#4f46e5"}
+                          strokeColor={(item.highest_usage_percent || 0) > 80 ? "#ef4444" : "#4f46e5"}
                         />
                       </div>
                     )}
@@ -196,11 +196,11 @@ export default function DashboardPage() {
                         <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 4 }}>
                           <Typography.Text ellipsis style={{ maxWidth: "60%" }}>{item.client_api_key_name}</Typography.Text>
                           <Typography.Text type={item.highest_usage_percent > 80 ? "danger" : "secondary"}>
-                            {item.highest_usage_percent.toFixed(0)}%
+                            {(item.highest_usage_percent || 0).toFixed(0)}%
                           </Typography.Text>
                         </div>
                         <Progress
-                          percent={item.highest_usage_percent}
+                          percent={item.highest_usage_percent || 0}
                           size="small"
                           showInfo={false}
                           strokeColor={item.is_warning_triggered ? "#f59e0b" : "#0ea5e9"}
@@ -228,10 +228,10 @@ export default function DashboardPage() {
               pagination={false}
               rowKey="model_public_name"
               columns={[
-                { title: "模型名称", dataKey: "model_public_name", render: (text) => <Typography.Text strong>{text}</Typography.Text> },
+                { title: "模型名称", dataIndex: "model_public_name", render: (text) => <Typography.Text strong>{text}</Typography.Text> },
                 { title: "请求数", dataIndex: "request_count", align: "right", render: (v) => formatNumber(v) },
-                { title: "成功率", dataIndex: "success_rate", align: "right", render: (v) => <Tag bordered={false} color={v > 98 ? "success" : "warning"}>{v.toFixed(1)}%</Tag> },
-                { title: "平均延迟", dataIndex: "average_latency_ms", align: "right", render: (v) => `${v.toFixed(0)}ms` },
+                { title: "成功率", dataIndex: "success_rate", align: "right", render: (v) => <Tag bordered={false} color={(v || 0) > 98 ? "success" : "warning"}>{(v || 0).toFixed(1)}%</Tag> },
+                { title: "平均延迟", dataIndex: "average_latency_ms", align: "right", render: (v) => `${(v || 0).toFixed(0)}ms` },
               ]}
             />
           </section>
