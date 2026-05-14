@@ -110,15 +110,22 @@ export default function KeysPage() {
     if (record.health_status === "cooldown") {
       return (
         <Space direction="vertical" size={2}>
-          <Tag color="orange">冷却中</Tag>
-          <span style={{ color: "#8c8c8c", fontSize: 12 }}>
-            {record.cooldown_reason || "临时异常"}，截止 {record.cooldown_until ? new Date(record.cooldown_until).toLocaleString() : "-"}
+          <Tag bordered={false} className="tag-status" color="warning">
+            冷却中
+          </Tag>
+          <span style={{ color: "#8c8c8c", fontSize: 12, fontVariantNumeric: "tabular-nums" }}>
+            {record.cooldown_reason || "临时异常"}，截止{" "}
+            {record.cooldown_until ? new Date(record.cooldown_until).toLocaleString() : "-"}
           </span>
         </Space>
       );
     }
 
-    return <Tag color="green">正常</Tag>;
+    return (
+      <Tag bordered={false} className="tag-status" color="success">
+        正常
+      </Tag>
+    );
   };
 
   return (
@@ -143,9 +150,24 @@ export default function KeysPage() {
           columns={[
             { title: "名称", dataIndex: "name", key: "name" },
             { title: "提供方", dataIndex: "provider_name", key: "provider_name" },
-            { title: "脱敏密钥", dataIndex: "masked_api_key", key: "masked_api_key" },
-            { title: "权重", dataIndex: "weight", key: "weight" },
-            { title: "优先级", dataIndex: "priority", key: "priority" },
+            {
+              title: "脱敏密钥",
+              dataIndex: "masked_api_key",
+              key: "masked_api_key",
+              render: (v) => <span style={{ fontVariantNumeric: "tabular-nums" }}>{v}</span>,
+            },
+            {
+              title: "权重",
+              dataIndex: "weight",
+              key: "weight",
+              render: (v) => <span style={{ fontVariantNumeric: "tabular-nums" }}>{v}</span>,
+            },
+            {
+              title: "优先级",
+              dataIndex: "priority",
+              key: "priority",
+              render: (v) => <span style={{ fontVariantNumeric: "tabular-nums" }}>{v}</span>,
+            },
             {
               title: "网关健康度",
               key: "health_status",
@@ -155,7 +177,23 @@ export default function KeysPage() {
               title: "状态",
               dataIndex: "status",
               key: "status",
-              render: (value) => <Tag color={value === "active" ? "green" : value === "disabled" ? "default" : "gold"}>{value}</Tag>,
+              render: (value) => (
+                <Tag
+                  bordered={false}
+                  className="tag-status"
+                  color={
+                    value === "active"
+                      ? "success"
+                      : value === "disabled"
+                        ? "default"
+                        : value === "invalid"
+                          ? "error"
+                          : "warning"
+                  }
+                >
+                  {value.toUpperCase()}
+                </Tag>
+              ),
             },
             {
               title: "最近错误",

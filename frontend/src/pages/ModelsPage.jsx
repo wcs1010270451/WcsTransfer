@@ -176,43 +176,47 @@ export default function ModelsPage() {
               title: "输入成本价 $/1M",
               dataIndex: "cost_input_per_1m",
               key: "cost_input_per_1m",
-              render: (value) => Number(value || 0).toFixed(4),
+              render: (value) => <span style={{ fontVariantNumeric: "tabular-nums" }}>{Number(value || 0).toFixed(4)}</span>,
             },
             {
               title: "输出成本价 $/1M",
               dataIndex: "cost_output_per_1m",
               key: "cost_output_per_1m",
-              render: (value) => Number(value || 0).toFixed(4),
+              render: (value) => <span style={{ fontVariantNumeric: "tabular-nums" }}>{Number(value || 0).toFixed(4)}</span>,
             },
             {
               title: "输入售价 $/1M",
               dataIndex: "sale_input_per_1m",
               key: "sale_input_per_1m",
-              render: (value) => Number(value || 0).toFixed(4),
+              render: (value) => <span style={{ fontVariantNumeric: "tabular-nums" }}>{Number(value || 0).toFixed(4)}</span>,
             },
             {
               title: "输出售价 $/1M",
               dataIndex: "sale_output_per_1m",
               key: "sale_output_per_1m",
-              render: (value) => Number(value || 0).toFixed(4),
+              render: (value) => <span style={{ fontVariantNumeric: "tabular-nums" }}>{Number(value || 0).toFixed(4)}</span>,
             },
             {
               title: "预留倍率",
               dataIndex: "reserve_multiplier",
               key: "reserve_multiplier",
-              render: (value) => Number(value || 1).toFixed(2),
+              render: (value) => <span style={{ fontVariantNumeric: "tabular-nums" }}>{Number(value || 1).toFixed(2)}</span>,
             },
             {
               title: "最低预留 $",
               dataIndex: "reserve_min_amount",
               key: "reserve_min_amount",
-              render: (value) => Number(value || 0).toFixed(4),
+              render: (value) => <span style={{ fontVariantNumeric: "tabular-nums" }}>{Number(value || 0).toFixed(4)}</span>,
             },
             {
               title: "状态",
               dataIndex: "is_enabled",
               key: "is_enabled",
-              render: (value) => <Tag color={value ? "green" : "default"}>{value ? "启用" : "停用"}</Tag>,
+              render: (value) => (
+                <Tag bordered={false} className="tag-status" color={value ? "success" : "default"}>
+                  {value ? "启用" : "停用"}
+                </Tag>
+              ),
             },
             {
               title: "操作",

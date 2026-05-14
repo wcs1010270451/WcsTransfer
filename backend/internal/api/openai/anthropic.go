@@ -78,13 +78,19 @@ func (h *Handler) handleMessages(c *gin.Context, options chatCompletionOptions) 
 		logState.metadata["client_api_key_name"] = clientKey.Name
 		defer func(key entity.ClientAPIKey) {
 			if logState.totalTokens > 0 {
-				_ = h.quota.AddTokenUsage(c.Request.Context(), key, logState.totalTokens)
+				h.worker.Submit(func(ctx context.Context) {
+					_ = h.quota.AddTokenUsage(ctx, key, logState.totalTokens)
+				})
 			}
 		}(clientKey)
 	}
+
 	defer func() {
-		h.writeRequestLog(c.Request.Context(), startedAt, logState)
+		h.worker.Submit(func(ctx context.Context) {
+			h.writeRequestLog(ctx, startedAt, logState)
+		})
 	}()
+
 
 	writeJSONError := func(statusCode int, errorType string, message string) {
 		logState.httpStatus = statusCode
@@ -223,7 +229,7 @@ func (h *Handler) handleMessages(c *gin.Context, options chatCompletionOptions) 
 		return
 	}
 
-	timeout := 120 * time.Second
+	timeout := 300 * time.Second
 	if route.Model.TimeoutSeconds > 0 {
 		timeout = time.Duration(route.Model.TimeoutSeconds) * time.Second
 	}

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -39,6 +40,7 @@ type Handler struct {
 	store           repository.PublicModelStore
 	logWriter       repository.RequestLogWriter
 	httpClient      *http.Client
+	worker          *platform.BackgroundWorker
 	counters        sync.Map
 	keyHealth       *keyhealth.Tracker
 	quota           *clientquota.Service
@@ -95,15 +97,36 @@ type adminDebugChatRequest struct {
 }
 
 func NewHandler(
+	cfg config.Config,
 	store repository.PublicModelStore,
 	logWriter repository.RequestLogWriter,
 	httpClient *http.Client,
+	worker *platform.BackgroundWorker,
 	tracker *keyhealth.Tracker,
 	quota *clientquota.Service,
 ) *Handler {
 	client := httpClient
 	if client == nil {
-		client = &http.Client{}
+		// 优化高并发与长思考模型的连接池配置
+		transport := &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+			DialContext: (&net.Dialer{
+				Timeout:   30 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          cfg.HTTPClientMaxIdleConns,
+			IdleConnTimeout:       cfg.HTTPClientIdleConnTimeout,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+			MaxIdleConnsPerHost:   cfg.HTTPClientMaxIdleConnsPerHost,
+			// 注意：不对 ResponseHeaderTimeout 设限，允许长思考模型生成
+		}
+		client = &http.Client{
+			Transport: transport,
+			// 注意：不再设置 client.Timeout，因为这是一个绝对超时，会掐断流式传输。
+			// 我们改用 Request Context 来进行更精细的超时控制。
+		}
 	}
 	if tracker == nil {
 		tracker = keyhealth.NewTracker()
@@ -113,6 +136,7 @@ func NewHandler(
 		store:         store,
 		logWriter:     logWriter,
 		httpClient:    client,
+		worker:        worker,
 		keyHealth:     tracker,
 		quota:         quota,
 		vertexClients: make(map[string]*genai.Client),
@@ -278,13 +302,17 @@ func (h *Handler) handleChatCompletions(c *gin.Context, options chatCompletionOp
 		logState.metadata["client_api_key_name"] = clientKey.Name
 		defer func(key entity.ClientAPIKey) {
 			if logState.totalTokens > 0 {
-				_ = h.quota.AddTokenUsage(c.Request.Context(), key, logState.totalTokens)
+				h.worker.Submit(func(ctx context.Context) {
+					_ = h.quota.AddTokenUsage(ctx, key, logState.totalTokens)
+				})
 			}
 		}(clientKey)
 	}
 
 	defer func() {
-		h.writeRequestLog(c.Request.Context(), startedAt, logState)
+		h.worker.Submit(func(ctx context.Context) {
+			h.writeRequestLog(ctx, startedAt, logState)
+		})
 	}()
 
 	writeJSONError := func(statusCode int, errorType string, message string) {
@@ -452,7 +480,7 @@ func (h *Handler) handleChatCompletions(c *gin.Context, options chatCompletionOp
 		return
 	}
 
-	timeout := 120 * time.Second
+	timeout := 300 * time.Second
 	if route.Model.TimeoutSeconds > 0 {
 		timeout = time.Duration(route.Model.TimeoutSeconds) * time.Second
 	}
@@ -632,12 +660,16 @@ func (h *Handler) handleEmbeddings(c *gin.Context, options chatCompletionOptions
 		logState.metadata["client_api_key_name"] = clientKey.Name
 		defer func(key entity.ClientAPIKey) {
 			if logState.totalTokens > 0 {
-				_ = h.quota.AddTokenUsage(c.Request.Context(), key, logState.totalTokens)
+				h.worker.Submit(func(ctx context.Context) {
+					_ = h.quota.AddTokenUsage(ctx, key, logState.totalTokens)
+				})
 			}
 		}(clientKey)
 	}
 	defer func() {
-		h.writeRequestLog(c.Request.Context(), startedAt, logState)
+		h.worker.Submit(func(ctx context.Context) {
+			h.writeRequestLog(ctx, startedAt, logState)
+		})
 	}()
 
 	writeJSONError := func(statusCode int, errorType string, message string) {
@@ -750,7 +782,7 @@ func (h *Handler) handleEmbeddings(c *gin.Context, options chatCompletionOptions
 		return
 	}
 
-	timeout := 120 * time.Second
+	timeout := 300 * time.Second
 	if route.Model.TimeoutSeconds > 0 {
 		timeout = time.Duration(route.Model.TimeoutSeconds) * time.Second
 	}

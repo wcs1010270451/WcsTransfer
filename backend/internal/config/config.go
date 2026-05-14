@@ -54,6 +54,9 @@ type Config struct {
 	AlertWebhookURL             string
 	AlertWebhookProvider        string
 	AlertWebhookTimeout         time.Duration
+	HTTPClientMaxIdleConns      int
+	HTTPClientMaxIdleConnsPerHost int
+	HTTPClientIdleConnTimeout   time.Duration
 }
 
 func Load() Config {
@@ -108,6 +111,9 @@ func Load() Config {
 		AlertWebhookURL:             getEnv("ALERT_WEBHOOK_URL", ""),
 		AlertWebhookProvider:        strings.ToLower(getEnv("ALERT_WEBHOOK_PROVIDER", "generic")),
 		AlertWebhookTimeout:         getDuration("ALERT_WEBHOOK_TIMEOUT", 5*time.Second),
+		HTTPClientMaxIdleConns:      getInt("HTTP_CLIENT_MAX_IDLE_CONNS", 100),
+		HTTPClientMaxIdleConnsPerHost: getInt("HTTP_CLIENT_MAX_IDLE_CONNS_PER_HOST", 100),
+		HTTPClientIdleConnTimeout:   getDuration("HTTP_CLIENT_IDLE_CONN_TIMEOUT", 90*time.Second),
 	}
 }
 

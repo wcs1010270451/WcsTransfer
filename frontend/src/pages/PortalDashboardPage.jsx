@@ -14,16 +14,17 @@ import {
 import { fetchPortalDailyStats, fetchPortalStats } from "../api/client";
 
 function fmt(value) {
-  return new Intl.NumberFormat("zh-CN").format(Number(value || 0));
+  return <span style={{ fontVariantNumeric: "tabular-nums" }}>{new Intl.NumberFormat("zh-CN").format(Number(value || 0))}</span>;
 }
 
 function fmtCurrency(value) {
-  return new Intl.NumberFormat("zh-CN", {
+  const formatted = new Intl.NumberFormat("zh-CN", {
     style: "currency",
     currency: "USD",
     minimumFractionDigits: 4,
     maximumFractionDigits: 4,
   }).format(Number(value || 0));
+  return <span style={{ fontVariantNumeric: "tabular-nums" }}>{formatted}</span>;
 }
 
 function StatCard({ title, value, suffix, formatter }) {
@@ -115,38 +116,42 @@ export default function PortalDashboardPage() {
       <section className="panel-card">
         <Typography.Title level={5} style={{ marginTop: 0, marginBottom: 12 }}>账户状态</Typography.Title>
         <Space wrap>
-          <Tag color={(s.wallet_balance || 0) > 0 ? "blue" : "red"} style={{ fontSize: 14, padding: "4px 10px" }}>
+          <Tag bordered={false} className="tag-status" color={(s.wallet_balance || 0) > 0 ? "success" : "error"} style={{ fontSize: 14, padding: "4px 12px" }}>
             钱包余额：{fmtCurrency(s.wallet_balance || 0)}
           </Tag>
-          <Tag color="blue" style={{ fontSize: 14, padding: "4px 10px" }}>总密钥数：{fmt(s.client_key_count || 0)}</Tag>
-          <Tag color="blue" style={{ fontSize: 14, padding: "4px 10px" }}>活跃密钥：{fmt(s.active_client_keys || 0)}</Tag>
+          <Tag bordered={false} className="tag-status" color="processing" style={{ fontSize: 14, padding: "4px 12px" }}>
+            总密钥数：{fmt(s.client_key_count || 0)}
+          </Tag>
+          <Tag bordered={false} className="tag-status" color="processing" style={{ fontSize: 14, padding: "4px 12px" }}>
+            活跃密钥：{fmt(s.active_client_keys || 0)}
+          </Tag>
         </Space>
       </section>
 
       <Row gutter={[16, 16]}>
         <Col xs={24} sm={12} lg={8}>
-          <StatCard title="请求总数" value={s.request_count || 0} formatter={fmt} />
+          <StatCard title="请求总数" value={s.request_count || 0} formatter={(v) => <span style={{ fontVariantNumeric: "tabular-nums" }}>{new Intl.NumberFormat("zh-CN").format(v)}</span>} />
         </Col>
         <Col xs={24} sm={12} lg={8}>
-          <StatCard title="总 Token" value={s.total_tokens || 0} formatter={fmt} />
+          <StatCard title="总 Token" value={s.total_tokens || 0} formatter={(v) => <span style={{ fontVariantNumeric: "tabular-nums" }}>{new Intl.NumberFormat("zh-CN").format(v)}</span>} />
         </Col>
         <Col xs={24} sm={12} lg={8}>
-          <StatCard title="成功率" value={Number(s.success_rate || 0).toFixed(2)} suffix="%" />
+          <StatCard title="成功率" value={Number(s.success_rate || 0).toFixed(2)} suffix={<span style={{ fontVariantNumeric: "tabular-nums" }}>%</span>} />
         </Col>
       </Row>
 
       <Row gutter={[16, 16]}>
         <Col xs={24} sm={12} lg={6}>
-          <StatCard title="输入 Token" value={s.prompt_tokens || 0} formatter={fmt} />
+          <StatCard title="输入 Token" value={s.prompt_tokens || 0} formatter={(v) => <span style={{ fontVariantNumeric: "tabular-nums" }}>{new Intl.NumberFormat("zh-CN").format(v)}</span>} />
         </Col>
         <Col xs={24} sm={12} lg={6}>
-          <StatCard title="输出 Token" value={s.completion_tokens || 0} formatter={fmt} />
+          <StatCard title="输出 Token" value={s.completion_tokens || 0} formatter={(v) => <span style={{ fontVariantNumeric: "tabular-nums" }}>{new Intl.NumberFormat("zh-CN").format(v)}</span>} />
         </Col>
         <Col xs={24} sm={12} lg={6}>
-          <StatCard title="平均延迟" value={Number(s.average_latency_ms || 0).toFixed(0)} suffix="ms" />
+          <StatCard title="平均延迟" value={Number(s.average_latency_ms || 0).toFixed(0)} suffix={<span style={{ fontVariantNumeric: "tabular-nums" }}>ms</span>} />
         </Col>
         <Col xs={24} sm={12} lg={6}>
-          <StatCard title="活跃密钥数" value={s.active_client_keys || 0} formatter={fmt} />
+          <StatCard title="活跃密钥数" value={s.active_client_keys || 0} formatter={(v) => <span style={{ fontVariantNumeric: "tabular-nums" }}>{new Intl.NumberFormat("zh-CN").format(v)}</span>} />
         </Col>
       </Row>
 

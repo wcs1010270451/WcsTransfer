@@ -19,6 +19,7 @@ type Dependencies struct {
 	config   config.Config
 	Postgres *pgxpool.Pool
 	Redis    *redis.Client
+	Worker   *BackgroundWorker
 }
 
 func New(ctx context.Context, cfg config.Config) (*Dependencies, error) {
@@ -64,10 +65,17 @@ func New(ctx context.Context, cfg config.Config) (*Dependencies, error) {
 		deps.Redis = client
 	}
 
+	// 初始化异步任务工作池 (v3 优化)
+	deps.Worker = NewBackgroundWorker(1000, 10)
+
 	return deps, nil
 }
 
 func (d *Dependencies) Close() {
+	if d.Worker != nil {
+		d.Worker.Stop()
+	}
+
 	if d.Redis != nil {
 		_ = d.Redis.Close()
 	}

@@ -218,7 +218,11 @@ export default function ProvidersPage() {
               title: "状态",
               dataIndex: "status",
               key: "status",
-              render: (value) => <Tag color={value === "active" ? "green" : "default"}>{value === "active" ? "启用" : "停用"}</Tag>,
+              render: (value) => (
+                <Tag bordered={false} className="tag-status" color={value === "active" ? "success" : "default"}>
+                  {value === "active" ? "启用" : "停用"}
+                </Tag>
+              ),
             },
             {
               title: "操作",

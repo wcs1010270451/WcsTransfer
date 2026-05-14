@@ -25,6 +25,10 @@ function formatJSON(value) {
   }
 }
 
+function formatNumber(value) {
+  return new Intl.NumberFormat().format(value || 0);
+}
+
 export default function LogsPage() {
   const { message } = App.useApp();
   const [form] = Form.useForm();
@@ -219,14 +223,14 @@ export default function LogsPage() {
               key: "success",
               width: 110,
               render: (value) => (
-                <Tag bordered={false} color={value ? "success" : "error"} style={{ borderRadius: 6 }}>
+                <Tag bordered={false} className="tag-status" color={value ? "success" : "error"} style={{ borderRadius: 20 }}>
                   {value ? "SUCCESS" : "FAILED"}
                 </Tag>
               ),
             },
-            { title: "HTTP", dataIndex: "http_status", key: "http_status", width: 80, align: "center" },
-            { title: "延迟", dataIndex: "latency_ms", key: "latency_ms", width: 100, align: "right", render: (value) => `${value}ms` },
-            { title: "Tokens", dataIndex: "total_tokens", key: "total_tokens", width: 100, align: "right" },
+            { title: "HTTP", dataIndex: "http_status", key: "http_status", width: 80, align: "center", render: (v) => <span style={{ fontVariantNumeric: "tabular-nums" }}>{v}</span> },
+            { title: "延迟", dataIndex: "latency_ms", key: "latency_ms", width: 100, align: "right", render: (v) => <span style={{ fontVariantNumeric: "tabular-nums" }}>{v}ms</span> },
+            { title: "Tokens", dataIndex: "total_tokens", key: "total_tokens", width: 100, align: "right", render: (v) => <span style={{ fontVariantNumeric: "tabular-nums" }}>{formatNumber(v)}</span> },
             {
               title: "时间",
               dataIndex: "created_at",

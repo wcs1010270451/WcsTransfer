@@ -53,7 +53,7 @@ func (h *Handler) handleWithVertexAISDK(
 	logState *chatLogState,
 	options geminiOptions,
 ) {
-	timeout := 120 * time.Second
+	timeout := 300 * time.Second
 	if route.Model.TimeoutSeconds > 0 {
 		timeout = time.Duration(route.Model.TimeoutSeconds) * time.Second
 	}
@@ -355,8 +355,10 @@ func logVertexAIAttempt(logState *chatLogState, projectID, location string) {
 
 // writeVertexAIRequestLog records the log for a Vertex AI request.
 // For Vertex AI, debit still applies the same way as for other providers.
-func (h *Handler) writeVertexAIRequestLog(ctx context.Context, startedAt time.Time, logState *chatLogState) {
-	h.writeRequestLog(ctx, startedAt, *logState)
+func (h *Handler) writeVertexAIRequestLog(_ context.Context, startedAt time.Time, logState *chatLogState) {
+	h.worker.Submit(func(ctx context.Context) {
+		h.writeRequestLog(ctx, startedAt, *logState)
+	})
 }
 
 // GeminiGenerateContent and GeminiStreamGenerateContent route to Vertex AI

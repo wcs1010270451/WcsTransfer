@@ -106,7 +106,7 @@ export default function ClientKeysPage() {
               dataIndex: "status",
               key: "status",
               render: (value) => (
-                <Tag bordered={false} color={value === "active" ? "success" : "default"} style={{ borderRadius: 6 }}>
+                <Tag bordered={false} className="tag-status" color={value === "active" ? "success" : "default"}>
                   {value.toUpperCase()}
                 </Tag>
               ),

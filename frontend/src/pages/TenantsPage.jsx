@@ -16,16 +16,21 @@ import {
 import PageHeaderCard from "../components/PageHeaderCard";
 
 function formatCurrency(value) {
-  return new Intl.NumberFormat("zh-CN", {
+  const formatted = new Intl.NumberFormat("zh-CN", {
     style: "currency",
     currency: "USD",
     minimumFractionDigits: 2,
     maximumFractionDigits: 4,
   }).format(Number(value || 0));
+  return <span style={{ fontVariantNumeric: "tabular-nums" }}>{formatted}</span>;
 }
 
 function formatDateTime(value) {
-  return value ? new Date(value).toLocaleString("zh-CN") : "-";
+  return value ? (
+    <span style={{ fontVariantNumeric: "tabular-nums" }}>{new Date(value).toLocaleString("zh-CN")}</span>
+  ) : (
+    "-"
+  );
 }
 
 function downloadBlob(blob, filename) {
@@ -345,12 +350,22 @@ export default function TenantsPage() {
               key: "status",
               width: 110,
               render: (value) => (
-                <Tag color={value === "active" ? "green" : value === "pending" ? "gold" : "red"}>
+                <Tag
+                  bordered={false}
+                  className="tag-status"
+                  color={value === "active" ? "success" : value === "pending" ? "warning" : "default"}
+                >
                   {value === "active" ? "启用" : value === "pending" ? "待审核" : "停用"}
                 </Tag>
               ),
             },
-            { title: "密钥上限", dataIndex: "max_client_keys", key: "max_client_keys", width: 120 },
+            {
+              title: "密钥上限",
+              dataIndex: "max_client_keys",
+              key: "max_client_keys",
+              width: 120,
+              render: (v) => <span style={{ fontVariantNumeric: "tabular-nums" }}>{v}</span>,
+            },
             {
               title: "最低可调用余额",
               dataIndex: "min_available_balance",
@@ -585,7 +600,11 @@ export default function TenantsPage() {
                   dataIndex: "status",
                   key: "status",
                   width: 100,
-                  render: (value) => <Tag color={value === "active" ? "green" : "red"}>{value === "active" ? "启用" : "停用"}</Tag>,
+                  render: (value) => (
+                    <Tag bordered={false} className="tag-status" color={value === "active" ? "success" : "error"}>
+                      {value === "active" ? "启用" : "停用"}
+                    </Tag>
+                  ),
                 },
                 { title: "最近登录", dataIndex: "last_login_at", key: "last_login_at", width: 180, render: formatDateTime },
                 { title: "创建时间", dataIndex: "created_at", key: "created_at", width: 180, render: formatDateTime },
@@ -663,7 +682,11 @@ export default function TenantsPage() {
               dataIndex: "direction",
               key: "direction",
               width: 100,
-              render: (value) => <Tag color={value === "credit" ? "green" : "red"}>{value === "credit" ? "充值" : "扣费"}</Tag>,
+              render: (value) => (
+                <Tag bordered={false} className="tag-status" color={value === "credit" ? "success" : "error"}>
+                  {value === "credit" ? "充值" : "扣费"}
+                </Tag>
+              ),
             },
             { title: "金额", dataIndex: "amount", key: "amount", width: 120, render: formatCurrency },
             { title: "变动前", dataIndex: "balance_before", key: "balance_before", width: 120, render: formatCurrency },
@@ -675,9 +698,21 @@ export default function TenantsPage() {
               width: 100,
               render: (value) => (value === "admin" ? "管理员" : value === "system" ? "系统" : value || "-"),
             },
-            { title: "Trace ID", dataIndex: "trace_id", key: "trace_id", width: 180, render: (value) => value || "-" },
+            {
+              title: "Trace ID",
+              dataIndex: "trace_id",
+              key: "trace_id",
+              width: 180,
+              render: (value) => <span style={{ fontVariantNumeric: "tabular-nums" }}>{value || "-"}</span>,
+            },
             { title: "模型", dataIndex: "model_public_name", key: "model_public_name", width: 140, render: (value) => value || "-" },
-            { title: "Token", dataIndex: "total_tokens", key: "total_tokens", width: 100, render: (value) => value || 0 },
+            {
+              title: "Token",
+              dataIndex: "total_tokens",
+              key: "total_tokens",
+              width: 100,
+              render: (value) => <span style={{ fontVariantNumeric: "tabular-nums" }}>{new Intl.NumberFormat().format(value || 0)}</span>,
+            },
             { title: "预留金额", dataIndex: "reserved_amount", key: "reserved_amount", width: 120, render: formatCurrency },
             { title: "上游成本", dataIndex: "cost_amount", key: "cost_amount", width: 120, render: formatCurrency },
             { title: "对客计费", dataIndex: "billable_amount", key: "billable_amount", width: 120, render: formatCurrency },

@@ -19,12 +19,21 @@ import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { fetchPortalClientKeys, fetchPortalKeyModelStats, fetchPortalLogDetail, fetchPortalLogs, fetchPortalModels, sendPortalDebugChat } from "../api/client";
 
 function fmtCurrency(value) {
-  return new Intl.NumberFormat("zh-CN", {
+  const formatted = new Intl.NumberFormat("zh-CN", {
     style: "currency",
     currency: "USD",
     minimumFractionDigits: 4,
     maximumFractionDigits: 4,
   }).format(Number(value || 0));
+  return <span style={{ fontVariantNumeric: "tabular-nums" }}>{formatted}</span>;
+}
+
+function fmtDateTime(value) {
+  return value ? (
+    <span style={{ fontVariantNumeric: "tabular-nums" }}>{new Date(value).toLocaleString("zh-CN")}</span>
+  ) : (
+    "-"
+  );
 }
 
 function fmtJSON(value) {
@@ -146,7 +155,7 @@ export default function PortalKeyDetailPage() {
       dataIndex: "created_at",
       key: "created_at",
       width: 180,
-      render: (v) => (v ? new Date(v).toLocaleString("zh-CN") : "-"),
+      render: fmtDateTime,
     },
     { title: "模型", dataIndex: "model_public_name", key: "model_public_name", width: 200, render: (v) => v || "-" },
     { title: "请求类型", dataIndex: "request_type", key: "request_type", width: 120 },
@@ -155,17 +164,33 @@ export default function PortalKeyDetailPage() {
       dataIndex: "success",
       key: "success",
       width: 80,
-      render: (v) => <Tag color={v ? "blue" : "red"}>{v ? "成功" : "失败"}</Tag>,
+      render: (v) => (
+        <Tag bordered={false} className="tag-status" color={v ? "success" : "error"}>
+          {v ? "成功" : "失败"}
+        </Tag>
+      ),
     },
-    { title: "HTTP", dataIndex: "http_status", key: "http_status", width: 70 },
+    {
+      title: "HTTP",
+      dataIndex: "http_status",
+      key: "http_status",
+      width: 80,
+      render: (v) => <span style={{ fontVariantNumeric: "tabular-nums" }}>{v}</span>,
+    },
     {
       title: "Token",
       dataIndex: "total_tokens",
       key: "total_tokens",
-      width: 90,
-      render: (v) => new Intl.NumberFormat("zh-CN").format(v || 0),
+      width: 100,
+      render: (v) => <span style={{ fontVariantNumeric: "tabular-nums" }}>{new Intl.NumberFormat("zh-CN").format(v || 0)}</span>,
     },
-    { title: "延迟", dataIndex: "latency_ms", key: "latency_ms", width: 90, render: (v) => `${v || 0} ms` },
+    {
+      title: "延迟",
+      dataIndex: "latency_ms",
+      key: "latency_ms",
+      width: 100,
+      render: (v) => <span style={{ fontVariantNumeric: "tabular-nums" }}>{v || 0} ms</span>,
+    },
     {
       title: "错误信息",
       dataIndex: "error_message",
@@ -204,24 +229,22 @@ export default function PortalKeyDetailPage() {
             <Descriptions.Item label="名称">{keyInfo?.name || "-"}</Descriptions.Item>
             <Descriptions.Item label="状态">
               {keyInfo ? (
-                <Tag color={keyInfo.status === "active" ? "blue" : "default"}>
+                <Tag bordered={false} className="tag-status" color={keyInfo.status === "active" ? "success" : "default"}>
                   {keyInfo.status === "active" ? "启用" : "停用"}
                 </Tag>
               ) : "-"}
             </Descriptions.Item>
-            <Descriptions.Item label="脱敏密钥">{keyInfo?.masked_key || "-"}</Descriptions.Item>
+            <Descriptions.Item label="脱敏密钥">
+              <span style={{ fontVariantNumeric: "tabular-nums" }}>{keyInfo?.masked_key || "-"}</span>
+            </Descriptions.Item>
             <Descriptions.Item label="今日消费">{fmtCurrency(keyInfo?.cost_usage?.daily_cost_used)}</Descriptions.Item>
             <Descriptions.Item label="本月消费">{fmtCurrency(keyInfo?.cost_usage?.monthly_cost_used)}</Descriptions.Item>
             <Descriptions.Item label="累计消费">{fmtCurrency(keyInfo?.cost_usage?.total_cost_used)}</Descriptions.Item>
-            <Descriptions.Item label="最近使用">
-              {keyInfo?.last_used_at ? new Date(keyInfo.last_used_at).toLocaleString("zh-CN") : "-"}
-            </Descriptions.Item>
+            <Descriptions.Item label="最近使用">{fmtDateTime(keyInfo?.last_used_at)}</Descriptions.Item>
             <Descriptions.Item label="过期时间">
-              {keyInfo?.expires_at ? new Date(keyInfo.expires_at).toLocaleString("zh-CN") : "永不过期"}
+              {keyInfo?.expires_at ? fmtDateTime(keyInfo.expires_at) : "永不过期"}
             </Descriptions.Item>
-            <Descriptions.Item label="创建时间">
-              {keyInfo?.created_at ? new Date(keyInfo.created_at).toLocaleString("zh-CN") : "-"}
-            </Descriptions.Item>
+            <Descriptions.Item label="创建时间">{fmtDateTime(keyInfo?.created_at)}</Descriptions.Item>
           </Descriptions>
         </div>
       </section>
@@ -237,10 +260,34 @@ export default function PortalKeyDetailPage() {
           locale={{ emptyText: "暂无调用记录" }}
           columns={[
             { title: "模型", dataIndex: "model_public_name", key: "model_public_name", minWidth: 160 },
-            { title: "请求数", dataIndex: "request_count", key: "request_count", width: 100, render: (v) => new Intl.NumberFormat("zh-CN").format(v) },
-            { title: "输入 Token", dataIndex: "prompt_tokens", key: "prompt_tokens", width: 130, render: (v) => new Intl.NumberFormat("zh-CN").format(v) },
-            { title: "输出 Token", dataIndex: "completion_tokens", key: "completion_tokens", width: 130, render: (v) => new Intl.NumberFormat("zh-CN").format(v) },
-            { title: "总 Token", dataIndex: "total_tokens", key: "total_tokens", width: 120, render: (v) => new Intl.NumberFormat("zh-CN").format(v) },
+            {
+              title: "请求数",
+              dataIndex: "request_count",
+              key: "request_count",
+              width: 100,
+              render: (v) => <span style={{ fontVariantNumeric: "tabular-nums" }}>{new Intl.NumberFormat("zh-CN").format(v)}</span>,
+            },
+            {
+              title: "输入 Token",
+              dataIndex: "prompt_tokens",
+              key: "prompt_tokens",
+              width: 130,
+              render: (v) => <span style={{ fontVariantNumeric: "tabular-nums" }}>{new Intl.NumberFormat("zh-CN").format(v)}</span>,
+            },
+            {
+              title: "输出 Token",
+              dataIndex: "completion_tokens",
+              key: "completion_tokens",
+              width: 130,
+              render: (v) => <span style={{ fontVariantNumeric: "tabular-nums" }}>{new Intl.NumberFormat("zh-CN").format(v)}</span>,
+            },
+            {
+              title: "总 Token",
+              dataIndex: "total_tokens",
+              key: "total_tokens",
+              width: 120,
+              render: (v) => <span style={{ fontVariantNumeric: "tabular-nums" }}>{new Intl.NumberFormat("zh-CN").format(v)}</span>,
+            },
             { title: "消费金额", dataIndex: "billable_amount", key: "billable_amount", width: 140, render: (v) => fmtCurrency(v) },
           ]}
         />
@@ -337,9 +384,15 @@ export default function PortalKeyDetailPage() {
                   </pre>
                   {debugResult.usage && (
                     <Space size={16} style={{ marginTop: 8, flexWrap: "wrap" }}>
-                      <Typography.Text type="secondary">输入 Token: {debugResult.usage.prompt_tokens ?? "-"}</Typography.Text>
-                      <Typography.Text type="secondary">输出 Token: {debugResult.usage.completion_tokens ?? "-"}</Typography.Text>
-                      <Typography.Text type="secondary">总 Token: {debugResult.usage.total_tokens ?? "-"}</Typography.Text>
+                      <Typography.Text type="secondary">
+                        输入 Token: <span style={{ fontVariantNumeric: "tabular-nums" }}>{debugResult.usage.prompt_tokens ?? "-"}</span>
+                      </Typography.Text>
+                      <Typography.Text type="secondary">
+                        输出 Token: <span style={{ fontVariantNumeric: "tabular-nums" }}>{debugResult.usage.completion_tokens ?? "-"}</span>
+                      </Typography.Text>
+                      <Typography.Text type="secondary">
+                        总 Token: <span style={{ fontVariantNumeric: "tabular-nums" }}>{debugResult.usage.total_tokens ?? "-"}</span>
+                      </Typography.Text>
                     </Space>
                   )}
                 </>
@@ -364,13 +417,25 @@ export default function PortalKeyDetailPage() {
               <Descriptions.Item label="模型">{selectedLog.model_public_name || "-"}</Descriptions.Item>
               <Descriptions.Item label="上游模型">{selectedLog.upstream_model || "-"}</Descriptions.Item>
               <Descriptions.Item label="状态">
-                <Tag color={selectedLog.success ? "blue" : "red"}>{selectedLog.success ? "成功" : "失败"}</Tag>
+                <Tag bordered={false} className="tag-status" color={selectedLog.success ? "success" : "error"}>
+                  {selectedLog.success ? "成功" : "失败"}
+                </Tag>
               </Descriptions.Item>
-              <Descriptions.Item label="HTTP">{selectedLog.http_status}</Descriptions.Item>
-              <Descriptions.Item label="延迟">{selectedLog.latency_ms} ms</Descriptions.Item>
-              <Descriptions.Item label="输入 Tokens">{selectedLog.prompt_tokens}</Descriptions.Item>
-              <Descriptions.Item label="输出 Tokens">{selectedLog.completion_tokens}</Descriptions.Item>
-              <Descriptions.Item label="总 Tokens">{selectedLog.total_tokens}</Descriptions.Item>
+              <Descriptions.Item label="HTTP">
+                <span style={{ fontVariantNumeric: "tabular-nums" }}>{selectedLog.http_status}</span>
+              </Descriptions.Item>
+              <Descriptions.Item label="延迟">
+                <span style={{ fontVariantNumeric: "tabular-nums" }}>{selectedLog.latency_ms} ms</span>
+              </Descriptions.Item>
+              <Descriptions.Item label="输入 Tokens">
+                <span style={{ fontVariantNumeric: "tabular-nums" }}>{selectedLog.prompt_tokens}</span>
+              </Descriptions.Item>
+              <Descriptions.Item label="输出 Tokens">
+                <span style={{ fontVariantNumeric: "tabular-nums" }}>{selectedLog.completion_tokens}</span>
+              </Descriptions.Item>
+              <Descriptions.Item label="总 Tokens">
+                <span style={{ fontVariantNumeric: "tabular-nums" }}>{selectedLog.total_tokens}</span>
+              </Descriptions.Item>
               <Descriptions.Item label="消费金额">{fmtCurrency(selectedLog.billable_amount || 0)}</Descriptions.Item>
               <Descriptions.Item label="错误类型">{selectedLog.error_type || "-"}</Descriptions.Item>
               <Descriptions.Item label="错误信息" span={2}>{selectedLog.error_message || "-"}</Descriptions.Item>

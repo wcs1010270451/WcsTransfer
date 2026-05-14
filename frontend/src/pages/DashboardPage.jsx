@@ -112,21 +112,13 @@ export default function DashboardPage() {
             {health ? (
               <Space direction="vertical" size={16} style={{ width: "100%" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <Space>
-                    <div
-                      style={{
-                        width: 10,
-                        height: 10,
-                        borderRadius: "50%",
-                        backgroundColor: health.status === "ok" ? "#10b981" : "#f59e0b",
-                        boxShadow: `0 0 10px ${health.status === "ok" ? "#10b981" : "#f59e0b"}`,
-                      }}
-                    />
+                  <Space size="middle">
+                    <div className={`status-dot ${health?.status === "ok" ? "status-dot-ok" : "status-dot-warn"}`} />
                     <Typography.Text strong style={{ fontSize: 16 }}>
-                      {health.status === "ok" ? "所有系统运行正常" : "系统存在异常"}
+                      {health?.status === "ok" ? "所有系统运行正常" : "系统存在异常"}
                     </Typography.Text>
                   </Space>
-                  <Tag bordered={false} color="blue">{health.environment}</Tag>
+                  <Tag bordered={false} color="blue" className="tag-type">{health?.environment}</Tag>
                 </div>
 
                 <List
@@ -136,6 +128,7 @@ export default function DashboardPage() {
                       <Typography.Text>{name}</Typography.Text>
                       <Tag
                         bordered={false}
+                        className="tag-status"
                         color={value?.status === "up" ? "success" : value?.status === "disabled" ? "default" : "error"}
                         icon={value?.status === "up" ? <CheckCircleOutlined /> : <InfoCircleOutlined />}
                       >
@@ -229,9 +222,9 @@ export default function DashboardPage() {
               rowKey="model_public_name"
               columns={[
                 { title: "模型名称", dataIndex: "model_public_name", render: (text) => <Typography.Text strong>{text}</Typography.Text> },
-                { title: "请求数", dataIndex: "request_count", align: "right", render: (v) => formatNumber(v) },
-                { title: "成功率", dataIndex: "success_rate", align: "right", render: (v) => <Tag bordered={false} color={(v || 0) > 98 ? "success" : "warning"}>{(v || 0).toFixed(1)}%</Tag> },
-                { title: "平均延迟", dataIndex: "average_latency_ms", align: "right", render: (v) => `${(v || 0).toFixed(0)}ms` },
+                { title: "请求数", dataIndex: "request_count", align: "right", render: (v) => <span style={{ fontVariantNumeric: "tabular-nums" }}>{formatNumber(v)}</span> },
+                { title: "成功率", dataIndex: "success_rate", align: "right", render: (v) => <Tag bordered={false} className="tag-status" color={(v || 0) > 98 ? "success" : "warning"}>{(v || 0).toFixed(1)}%</Tag> },
+                { title: "平均延迟", dataIndex: "average_latency_ms", align: "right", render: (v) => <span style={{ fontVariantNumeric: "tabular-nums" }}>{(v || 0).toFixed(0)}ms</span> },
               ]}
             />
           </section>
@@ -247,10 +240,10 @@ export default function DashboardPage() {
               rowKey="client_api_key_id"
               columns={[
                 { title: "客户端", dataIndex: "client_api_key_name", render: (text) => <Typography.Text strong>{text}</Typography.Text> },
-                { title: "请求数", dataIndex: "request_count", align: "right", render: (v) => formatNumber(v) },
-                { title: "消费金额", dataIndex: "billable_amount", align: "right", render: (v) => formatCurrency(v) },
-                { title: "毛利", render: (_, record) => (
-                  <Typography.Text type="success">
+                { title: "请求数", dataIndex: "request_count", align: "right", render: (v) => <span style={{ fontVariantNumeric: "tabular-nums" }}>{formatNumber(v)}</span> },
+                { title: "消费金额", dataIndex: "billable_amount", align: "right", render: (v) => <span style={{ fontVariantNumeric: "tabular-nums" }}>{formatCurrency(v)}</span> },
+                { title: "毛利", align: "right", render: (_, record) => (
+                  <Typography.Text type="success" style={{ fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>
                     {formatCurrency(record.billable_amount - record.cost_amount)}
                   </Typography.Text>
                 )},
