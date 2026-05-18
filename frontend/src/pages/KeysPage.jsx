@@ -1,7 +1,8 @@
 ﻿import { useEffect, useState } from "react";
-import { App, Button, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Table, Tag } from "antd";
+import { App, Button, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Tag } from "antd";
 import { createKey, fetchKeys, fetchProviders, updateKey } from "../api/client";
 import PageHeaderCard from "../components/PageHeaderCard";
+import DataTable from "../components/DataTable";
 
 export default function KeysPage() {
   const { message } = App.useApp();
@@ -142,7 +143,7 @@ export default function KeysPage() {
       />
 
       <section className="panel-card">
-        <Table
+        <DataTable
           rowKey="id"
           loading={loading}
           dataSource={keys}

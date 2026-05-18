@@ -19,7 +19,7 @@ export default function MetricCard({ title, value, suffix, hint, trend, trendVal
   };
 
   return (
-    <Card className="metric-card" bordered={false}>
+    <Card className="metric-card" variant="borderless">
       <Statistic
         title={
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>

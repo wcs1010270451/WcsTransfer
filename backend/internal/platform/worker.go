@@ -16,21 +16,34 @@ type BackgroundWorker struct {
 	wg       sync.WaitGroup
 	ctx      context.Context
 	cancel   context.CancelFunc
+	isSync   bool // 是否为同步模式（主要用于测试）
 }
 
-// NewBackgroundWorker 初始化工作池，queueSize 为任务队列长度，workers 为并发协程数
+// NewBackgroundWorker 初始化工作池
 func NewBackgroundWorker(queueSize int, workers int) *BackgroundWorker {
+	return newWorker(queueSize, workers, false)
+}
+
+// NewSyncWorker 初始化一个同步执行的工作池（仅用于测试）
+func NewSyncWorker() *BackgroundWorker {
+	return newWorker(0, 0, true)
+}
+
+func newWorker(queueSize int, workers int, isSync bool) *BackgroundWorker {
 	ctx, cancel := context.WithCancel(context.Background())
 	bw := &BackgroundWorker{
 		taskChan: make(chan Task, queueSize),
 		ctx:      ctx,
 		cancel:   cancel,
+		isSync:   isSync,
 	}
 
-	// 启动工作协程
-	for i := 0; i < workers; i++ {
-		bw.wg.Add(1)
-		go bw.worker()
+	if !isSync {
+		// 异步模式下启动工作协程
+		for i := 0; i < workers; i++ {
+			bw.wg.Add(1)
+			go bw.worker()
+		}
 	}
 
 	return bw
@@ -44,7 +57,6 @@ func (bw *BackgroundWorker) worker() {
 			if !ok {
 				return
 			}
-			// 执行任务，捕获 panic 防止整个进程崩溃
 			bw.runTask(task)
 		case <-bw.ctx.Done():
 			return
@@ -68,17 +80,27 @@ func (bw *BackgroundWorker) runTask(task Task) {
 
 // Submit 提交一个异步任务到队列
 func (bw *BackgroundWorker) Submit(task Task) {
+	if bw.isSync {
+		// 同步模式直接运行
+		bw.runTask(task)
+		return
+	}
+
 	select {
 	case bw.taskChan <- task:
 		// 成功入队
 	default:
-		// 队列已满，为了不阻塞主链路，可以选择丢弃或打印警告
+		// 队列已满
 		log.Printf("[Worker] 警告: 异步任务队列已满，任务被丢弃")
 	}
 }
 
-// Stop 优雅关闭工作池，等待进行中的任务完成
+// Stop 优雅关闭工作池
 func (bw *BackgroundWorker) Stop() {
+	if bw.isSync {
+		bw.cancel()
+		return
+	}
 	close(bw.taskChan)
 	bw.cancel()
 	bw.wg.Wait()

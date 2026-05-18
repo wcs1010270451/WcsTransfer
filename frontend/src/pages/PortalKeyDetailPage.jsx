@@ -9,7 +9,6 @@ import {
   Modal,
   Select,
   Space,
-  Table,
   Tag,
   Tooltip,
   Typography,
@@ -17,6 +16,7 @@ import {
 import { ArrowLeftOutlined, SendOutlined } from "@ant-design/icons";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { fetchPortalClientKeys, fetchPortalKeyModelStats, fetchPortalLogDetail, fetchPortalLogs, fetchPortalModels, sendPortalDebugChat } from "../api/client";
+import DataTable from "../components/DataTable";
 
 function fmtCurrency(value) {
   const formatted = new Intl.NumberFormat("zh-CN", {
@@ -251,7 +251,7 @@ export default function PortalKeyDetailPage() {
 
       <section className="panel-card">
         <Typography.Title level={5} style={{ marginTop: 0, marginBottom: 16 }}>模型用量</Typography.Title>
-        <Table
+        <DataTable
           rowKey="model_public_name"
           loading={modelStatsLoading}
           dataSource={modelStats}
@@ -295,7 +295,7 @@ export default function PortalKeyDetailPage() {
 
       <section className="panel-card">
         <Typography.Title level={5} style={{ marginTop: 0, marginBottom: 16 }}>调用日志</Typography.Title>
-        <Table
+        <DataTable
           rowKey="id"
           loading={logLoading}
           dataSource={logs}
@@ -326,7 +326,7 @@ export default function PortalKeyDetailPage() {
           setDebugMessage("");
           setDebugProviderType("openai");
         }}
-        destroyOnClose
+        destroyOnHidden
       >
         <Space direction="vertical" style={{ width: "100%" }} size={12}>
           <Space wrap align="center">

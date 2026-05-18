@@ -10,12 +10,12 @@ import {
   InputNumber,
   Select,
   Space,
-  Table,
   Tag,
   Typography,
 } from "antd";
 import { exportLogs, fetchLogDetail, fetchLogs, fetchModels, fetchProviders } from "../api/client";
 import PageHeaderCard from "../components/PageHeaderCard";
+import DataTable from "../components/DataTable";
 
 function formatJSON(value) {
   try {
@@ -193,7 +193,7 @@ export default function LogsPage() {
       </section>
 
       <section className="panel-card">
-        <Table
+        <DataTable
           rowKey="id"
           loading={loading}
           dataSource={logs}

@@ -1,16 +1,18 @@
 import { useEffect, useState } from "react";
-import { App, Button, Drawer, Form, Input, InputNumber, Modal, Select, Space, Table, Tag, Typography } from "antd";
+import { App, Button, Drawer, Form, Input, InputNumber, Modal, Select, Space, Tag, Typography } from "antd";
 import {
   adjustUserWallet,
   correctUserWallet,
   createUser,
   exportUserBilling,
-  fetchUserWalletLedger,
   fetchUsers,
+  fetchUserWalletLedger,
   resetUserPassword,
   updateUserStatus,
 } from "../api/client";
 import PageHeaderCard from "../components/PageHeaderCard";
+import DataTable from "../components/DataTable";
+
 
 function formatCurrency(value) {
   const formatted = new Intl.NumberFormat("zh-CN", {
@@ -229,7 +231,7 @@ export default function UsersPage() {
       />
 
       <section className="panel-card">
-        <Table
+        <DataTable
           rowKey="id"
           loading={loading}
           dataSource={items}
@@ -396,7 +398,7 @@ export default function UsersPage() {
         title={ledgerItem ? `钱包流水 - ${ledgerItem.email}` : "钱包流水"}
         onClose={() => { setLedgerOpen(false); setLedgerItem(null); setLedgerRows([]); }}
       >
-        <Table
+        <DataTable
           rowKey="id"
           loading={ledgerLoading}
           dataSource={ledgerRows}

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { App, Button, Drawer, Form, Input, InputNumber, Modal, Select, Space, Table, Tag, Typography } from "antd";
+import { App, Button, Drawer, Form, Input, InputNumber, Modal, Select, Space, Tag, Typography } from "antd";
 import {
   adjustTenantWallet,
   correctTenantWallet,
@@ -14,6 +14,7 @@ import {
   updateTenantUserStatus,
 } from "../api/client";
 import PageHeaderCard from "../components/PageHeaderCard";
+import DataTable from "../components/DataTable";
 
 function formatCurrency(value) {
   const formatted = new Intl.NumberFormat("zh-CN", {
@@ -335,7 +336,7 @@ export default function TenantsPage() {
       />
 
       <section className="panel-card">
-        <Table
+        <DataTable
           rowKey="id"
           loading={loading}
           dataSource={items}
@@ -586,7 +587,7 @@ export default function TenantsPage() {
           </section>
 
           <section className="panel-card">
-            <Table
+            <DataTable
               rowKey="id"
               loading={usersLoading}
               dataSource={userRows}
@@ -658,7 +659,7 @@ export default function TenantsPage() {
           setLedgerRows([]);
         }}
       >
-        <Table
+        <DataTable
           rowKey="id"
           loading={ledgerLoading}
           dataSource={ledgerRows}

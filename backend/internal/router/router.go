@@ -51,17 +51,25 @@ func New(cfg config.Config, deps *platform.Dependencies, stores *Stores) *gin.En
 	engine.Use(gin.Recovery())
 	engine.Use(middleware.RequestID())
 
-	// 依赖组装
+	// 依赖组装与兜底
 	resolvedStores := resolveStores(deps, stores)
 	tracker := keyhealth.NewTracker() // 上游密钥健康检查追踪
 	quota := clientquota.New(nil)     // 租户额度/频率控制器
+	
+	// 如果未注入 Worker（如单元测试中），则使用同步 Worker 确保测试可预测性
+	workerPool := platform.NewSyncWorker()
 	if deps != nil {
-		quota = clientquota.New(deps.Redis)
+		if deps.Redis != nil {
+			quota = clientquota.New(deps.Redis)
+		}
+		if deps.Worker != nil {
+			workerPool = deps.Worker
+		}
 	}
 	
 	systemHandler := system.NewHandler(cfg, deps)
 	adminTokenService := adminauthsvc.New(cfg.AuthTokenSecret)
-	openAIHandler := openai.NewHandler(cfg, resolvedStores.Public, resolvedStores.Log, nil, deps.Worker, tracker, quota)
+	openAIHandler := openai.NewHandler(cfg, resolvedStores.Public, resolvedStores.Log, nil, workerPool, tracker, quota)
 	adminHandler := admin.NewHandler(resolvedStores.Admin, tracker, quota)
 	adminAuthHandler := adminauthapi.NewHandler(resolvedStores.AdminAuth, adminTokenService)
 	userTokenService := userauth.New(cfg.AuthTokenSecret)

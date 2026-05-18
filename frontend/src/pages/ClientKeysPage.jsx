@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { App, Button, Descriptions, Drawer, Popconfirm, Space, Table, Tag, Typography } from "antd";
+import { App, Button, Descriptions, Drawer, Popconfirm, Space, Tag, Typography } from "antd";
 import { fetchClientKeys, updateClientKey } from "../api/client";
 import PageHeaderCard from "../components/PageHeaderCard";
+import DataTable from "../components/DataTable";
 
 export default function ClientKeysPage() {
   const { message } = App.useApp();
@@ -74,7 +75,7 @@ export default function ClientKeysPage() {
       />
 
       <section className="panel-card">
-        <Table
+        <DataTable
           rowKey="id"
           loading={loading}
           dataSource={clientKeys}

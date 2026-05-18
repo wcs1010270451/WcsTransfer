@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, App, Button, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag, Typography } from "antd";
+import { Alert, App, Button, Form, Input, Modal, Popconfirm, Select, Space, Tag, Typography } from "antd";
 import { createProvider, fetchProviders, updateProvider } from "../api/client";
 import PageHeaderCard from "../components/PageHeaderCard";
+import DataTable from "../components/DataTable";
 
 function parseJSONField(value, fallback = {}) {
   if (!value || !String(value).trim()) {
@@ -204,7 +205,7 @@ export default function ProvidersPage() {
       />
 
       <section className="panel-card">
-        <Table
+        <DataTable
           rowKey="id"
           loading={loading}
           dataSource={providers}

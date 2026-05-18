@@ -21,8 +21,10 @@ import (
 	"github.com/jackc/pgx/v5"
 	"google.golang.org/genai"
 
+	"wcstransfer/backend/internal/config"
 	"wcstransfer/backend/internal/entity"
 	"wcstransfer/backend/internal/middleware"
+	"wcstransfer/backend/internal/platform"
 	"wcstransfer/backend/internal/repository"
 	"wcstransfer/backend/internal/service/clientquota"
 	"wcstransfer/backend/internal/service/keyhealth"
@@ -302,17 +304,29 @@ func (h *Handler) handleChatCompletions(c *gin.Context, options chatCompletionOp
 		logState.metadata["client_api_key_name"] = clientKey.Name
 		defer func(key entity.ClientAPIKey) {
 			if logState.totalTokens > 0 {
-				h.worker.Submit(func(ctx context.Context) {
-					_ = h.quota.AddTokenUsage(ctx, key, logState.totalTokens)
-				})
+				if h.worker != nil {
+					h.worker.Submit(func(ctx context.Context) {
+						_ = h.quota.AddTokenUsage(ctx, key, logState.totalTokens)
+					})
+				} else {
+					// 兜底逻辑：如果工作池未初始化，退化为普通协程
+					go func() {
+						_ = h.quota.AddTokenUsage(context.Background(), key, logState.totalTokens)
+					}()
+				}
 			}
 		}(clientKey)
 	}
 
 	defer func() {
-		h.worker.Submit(func(ctx context.Context) {
-			h.writeRequestLog(ctx, startedAt, logState)
-		})
+		if h.worker != nil {
+			h.worker.Submit(func(ctx context.Context) {
+				h.writeRequestLog(ctx, startedAt, logState)
+			})
+		} else {
+			// 兜底逻辑：如果工作池未初始化，退化为普通协程
+			go h.writeRequestLog(context.Background(), startedAt, logState)
+		}
 	}()
 
 	writeJSONError := func(statusCode int, errorType string, message string) {

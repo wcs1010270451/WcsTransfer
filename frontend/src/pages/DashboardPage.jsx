@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Alert, Col, List, Progress, Row, Space, Table, Tag, Typography, Card } from "antd";
+import { Alert, Col, List, Progress, Row, Space, Tag, Typography, Card } from "antd";
 import {
   ArrowUpOutlined,
   CheckCircleOutlined,
@@ -10,6 +10,7 @@ import {
 } from "@ant-design/icons";
 import MetricCard from "../components/MetricCard";
 import PageHeaderCard from "../components/PageHeaderCard";
+import DataTable from "../components/DataTable";
 import { fetchHealth, fetchLogs, fetchStats } from "../api/client";
 
 function formatCurrency(value) {
@@ -215,7 +216,7 @@ export default function DashboardPage() {
         <Col xs={24} lg={12}>
           <section className="panel-card">
             <div className="section-label">高频调用模型 (24h)</div>
-            <Table
+            <DataTable
               size="small"
               dataSource={stats?.top_models}
               pagination={false}
@@ -233,7 +234,7 @@ export default function DashboardPage() {
         <Col xs={24} lg={12}>
           <section className="panel-card">
             <div className="section-label">主要营收客户端 (24h)</div>
-            <Table
+            <DataTable
               size="small"
               dataSource={stats?.top_clients}
               pagination={false}

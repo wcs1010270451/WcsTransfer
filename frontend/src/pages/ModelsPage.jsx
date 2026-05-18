@@ -1,13 +1,13 @@
-﻿import { useEffect, useState } from "react";
-import { App, Button, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Switch, Table, Tag } from "antd";
+import React, { useEffect, useState } from "react";
+import { App, Button, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Switch, Tag } from "antd";
 import { createModel, fetchModels, fetchProviders, updateModel } from "../api/client";
 import PageHeaderCard from "../components/PageHeaderCard";
+import DataTable from "../components/DataTable";
 
 function parseJSONField(value, fallback = {}) {
   if (!value || !String(value).trim()) {
     return fallback;
   }
-
   return JSON.parse(value);
 }
 
@@ -15,7 +15,6 @@ function formatJSON(value) {
   if (!value) {
     return "{}";
   }
-
   try {
     return JSON.stringify(typeof value === "string" ? JSON.parse(value) : value, null, 2);
   } catch {
@@ -162,7 +161,7 @@ export default function ModelsPage() {
       />
 
       <section className="panel-card">
-        <Table
+        <DataTable
           rowKey="id"
           loading={loading}
           dataSource={models}
@@ -245,7 +244,7 @@ export default function ModelsPage() {
         onCancel={closeModal}
         onOk={() => form.submit()}
         okButtonProps={{ loading: submitting }}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form
           form={form}

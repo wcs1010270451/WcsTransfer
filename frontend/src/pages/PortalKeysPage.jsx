@@ -7,7 +7,6 @@ import {
   Modal,
   Popconfirm,
   Space,
-  Table,
   Tag,
   Typography,
 } from "antd";
@@ -18,6 +17,8 @@ import {
   fetchPortalClientKeys,
   renamePortalClientKey,
 } from "../api/client";
+import PageHeaderCard from "../components/PageHeaderCard";
+import DataTable from "../components/DataTable";
 
 export default function PortalKeysPage() {
   const navigate = useNavigate();
@@ -194,12 +195,11 @@ export default function PortalKeysPage() {
           <Typography.Title level={5} style={{ margin: 0 }}>客户端密钥</Typography.Title>
           <Button type="primary" onClick={() => setCreateOpen(true)}>创建密钥</Button>
         </Space>
-        <Table
+        <DataTable
           rowKey="id"
           loading={loading}
           dataSource={keys}
           pagination={false}
-          scroll={{ x: 1200 }}
           columns={columns}
           onRow={(record) => ({
             onClick: () => navigate(`/portal/keys/${record.id}`, { state: { key: record } }),
